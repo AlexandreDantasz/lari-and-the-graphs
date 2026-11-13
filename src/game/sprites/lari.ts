@@ -7,6 +7,11 @@
  * ombros, franja reta e cheia até as sobrancelhas, sobrancelhas escuras,
  * olhos castanho-escuros, sorriso, jaleco branco sobre blusa escura,
  * crachá e fone audiométrico no pescoço.
+ *
+ * Animação: cabeça+tronco são a base fixa; membros são desenhados por
+ * segmentos angulados (quadril→joelho→pé, ombro→cotovelo→mão), com os
+ * membros do lado oposto em tom sombreado — permitindo corrida com passada
+ * real, salto, mergulho e comemoração com silhuetas fluidas.
  */
 
 export const SPRITE_W = 20;
@@ -16,12 +21,12 @@ const PALETTE: Record<string, string> = {
   K: '#181019', // cabelo preto
   H: '#2c2030', // brilho do cabelo
   S: '#eab68c', // pele morena clara
-  D: '#b97f4e', // sombra de pele / nariz
+  D: '#b97f4e', // sombra de pele / membros do lado oposto
   P: '#e59a86', // bochechas
   E: '#3a2014', // olhos castanho-escuros / sobrancelhas
   M: '#a8503f', // boca/sorriso
   W: '#f5f5f0', // jaleco branco
-  G: '#c7ccd6', // sombra do jaleco
+  G: '#c7ccd6', // sombra do jaleco / manga do lado oposto
   B: '#26344f', // blusa escura
   N: '#2f4d78', // gola/fone audiométrico
   R: '#d94848', // crachá
@@ -29,7 +34,7 @@ const PALETTE: Record<string, string> = {
   '.': 'transparent',
 };
 
-/** Cabeça + tronco (linhas 0..19). Pernas e braços são animados proceduralmente. */
+/** Cabeça + tronco (linhas 0..19). Membros são animados por segmentos. */
 const BASE_ROWS: string[] = [
   '......KKKKKKK.......',
   '.....KKKKKKKKK......',
@@ -81,30 +86,8 @@ function drawBase(ctx: CanvasRenderingContext2D, ox: number, oy: number): void {
   }
 }
 
-interface LegPose {
-  hip: number;
-  thighDx: number;
-  thighRows: number;
-  shinDx: number;
-  shinRows: number;
-}
-
-function drawLeg(ctx: CanvasRenderingContext2D, ox: number, oy: number, leg: LegPose): void {
-  const thighX = leg.hip + leg.thighDx;
-  drawMatrixPixel(ctx, PALETTE.P, ox + thighX, oy + 20, 4, leg.thighRows);
-  const shinX = thighX + leg.shinDx;
-  drawMatrixPixel(ctx, PALETTE.P, ox + shinX, oy + 20 + leg.thighRows, 4, leg.shinRows);
-  drawMatrixPixel(
-    ctx,
-    PALETTE.J,
-    ox + shinX,
-    oy + 20 + leg.thighRows + leg.shinRows - 2,
-    5,
-    2,
-  );
-}
-
-function drawArm(
+/** Segmento inclinado: h linhas de largura w, deslocando dxTotal do início ao fim. */
+function drawAngled(
   ctx: CanvasRenderingContext2D,
   ox: number,
   oy: number,
@@ -112,80 +95,165 @@ function drawArm(
   y: number,
   w: number,
   h: number,
-  raised = false,
+  color: string,
+  dxTotal: number,
+  dir: 1 | -1 = 1,
 ): void {
-  if (raised) {
-    drawMatrixPixel(ctx, PALETTE.S, ox + x, oy + y, w, 2);
-    drawMatrixPixel(ctx, PALETTE.W, ox + x, oy + y + 2, w, h - 2);
+  for (let r = 0; r < h; r++) {
+    const dx = h > 1 ? Math.round((dxTotal * r) / (h - 1)) : 0;
+    drawMatrixPixel(ctx, color, ox + x + dx, oy + y + dir * r, w, 1);
+  }
+}
+
+interface LegPose {
+  hip: number;
+  thighDx: number;
+  kneeDx: number;
+  lift: number;
+  far?: boolean;
+}
+
+function drawLeg(ctx: CanvasRenderingContext2D, ox: number, oy: number, leg: LegPose): void {
+  const skin = leg.far ? PALETTE.D : PALETTE.P;
+  const thighRows = 4;
+  drawAngled(ctx, ox, oy, leg.hip, 20, 4, thighRows, skin, leg.thighDx);
+  const kneeX = leg.hip + leg.thighDx;
+  const shinRows = Math.max(2, 4 - leg.lift);
+  drawAngled(ctx, ox, oy, kneeX, 20 + thighRows, 4, shinRows, skin, leg.kneeDx);
+  const footX = kneeX + leg.kneeDx;
+  drawMatrixPixel(
+    ctx,
+    PALETTE.J,
+    ox + footX - 1,
+    oy + 20 + thighRows + shinRows - 2,
+    5,
+    2,
+  );
+}
+
+interface ArmPose {
+  x: number;
+  y: number;
+  upperDx: number;
+  foreDx: number;
+  far?: boolean;
+  up?: boolean;
+}
+
+function drawArm(ctx: CanvasRenderingContext2D, ox: number, oy: number, arm: ArmPose): void {
+  const sleeve = arm.far ? PALETTE.G : PALETTE.W;
+  const hand = arm.far ? PALETTE.D : PALETTE.S;
+  if (arm.up) {
+    drawAngled(ctx, ox, oy, arm.x, arm.y - 1, 2, 3, sleeve, arm.upperDx, -1);
+    const elbowX = arm.x + arm.upperDx;
+    drawAngled(ctx, ox, oy, elbowX, arm.y - 4, 2, 3, sleeve, arm.foreDx, -1);
+    drawMatrixPixel(ctx, hand, ox + elbowX + arm.foreDx, oy + arm.y - 8, 2, 2);
     return;
   }
-  drawMatrixPixel(ctx, PALETTE.W, ox + x, oy + y, w, h);
-  drawMatrixPixel(ctx, PALETTE.S, ox + x, oy + y + h, w, 2);
+  drawAngled(ctx, ox, oy, arm.x, arm.y, 2, 3, sleeve, arm.upperDx);
+  const elbowX = arm.x + arm.upperDx;
+  drawAngled(ctx, ox, oy, elbowX, arm.y + 3, 2, 3, sleeve, arm.foreDx);
+  drawMatrixPixel(ctx, hand, ox + elbowX + arm.foreDx, oy + arm.y + 6, 2, 2);
 }
 
 type PoseName = 'run' | 'jump' | 'dive' | 'cheer' | 'idle';
 
 /**
- * Ciclo de corrida em 4 frames: contato (perna dianteira estendida, traseira
- * com calcanhar levantado) e passagem (joelho flexionado no ar, perna de apoio
- * reta) — em visão lateral as pernas se alternam silhueta a silhueta. O corpo
- * sobe 1px nos frames de passagem.
+ * Ciclo de corrida: passada (perna de apoio estendida à frente, traseira com
+ * calcanhar erguido) e passagem (joelho da frente recolhido no ar, perna de
+ * apoio reta). Membros de trás em tom sombreado dão profundidade.
  */
-const RUN_STRIDE: { lead: LegPose; trail: LegPose } = {
-  lead: { hip: 11, thighDx: 2, thighRows: 4, shinDx: 2, shinRows: 4 },
-  trail: { hip: 5, thighDx: -2, thighRows: 4, shinDx: -2, shinRows: 3 },
+const RUN_STRIDE_LEGS: { lead: LegPose; trail: LegPose } = {
+  lead: { hip: 11, thighDx: 2, kneeDx: 2, lift: 0 },
+  trail: { hip: 5, thighDx: -3, kneeDx: -1, lift: 1, far: true },
 };
-const RUN_PASS: { lead: LegPose; trail: LegPose } = {
-  lead: { hip: 11, thighDx: 1, thighRows: 3, shinDx: 2, shinRows: 3 },
-  trail: { hip: 5, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 },
+const RUN_PASS_LEGS: { lead: LegPose; trail: LegPose } = {
+  lead: { hip: 11, thighDx: 1, kneeDx: -3, lift: 2 },
+  trail: { hip: 5, thighDx: 0, kneeDx: 0, lift: 0, far: true },
 };
-const RUN_CYCLE: Array<{ lead: LegPose; trail: LegPose }> = [
-  RUN_STRIDE,
-  RUN_PASS,
-  RUN_STRIDE,
-  RUN_PASS,
-];
+const STRIDE_ARMS: { near: ArmPose; far: ArmPose } = {
+  near: { x: 3, y: 14, upperDx: -1, foreDx: -1 },
+  far: { x: 15, y: 14, upperDx: 2, foreDx: 1, far: true },
+};
+const PASS_ARMS: { near: ArmPose; far: ArmPose } = {
+  near: { x: 14, y: 14, upperDx: 2, foreDx: 1 },
+  far: { x: 4, y: 14, upperDx: -2, foreDx: -1, far: true },
+};
 
-function drawPose(ctx: CanvasRenderingContext2D, ox: number, oy: number, pose: PoseName, f: number): void {
+/**
+ * Poses em duas camadas: 'far' desenha os membros do lado oposto (ficam ATRÁS
+ * da base — cabelo/tronco os recortam naturalmente) e 'near' os membros da
+ * frente (por cima do tronco). A ordem de composição é far → base → near.
+ */
+function drawPose(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  pose: PoseName,
+  f: number,
+  layer: 'far' | 'near',
+): void {
+  const far = layer === 'far';
   switch (pose) {
     case 'run': {
-      const cycle = RUN_CYCLE[f % 4];
-      drawLeg(ctx, ox, oy, cycle.lead);
-      drawLeg(ctx, ox, oy, cycle.trail);
-      const armSwing = f % 2 === 0 ? -1 : 1;
-      drawArm(ctx, ox, oy, 1, 16 + armSwing, 2, 3);
-      drawArm(ctx, ox, oy, 17, 16 - armSwing, 2, 3);
+      const stride = f % 2 === 0;
+      const legs = stride ? RUN_STRIDE_LEGS : RUN_PASS_LEGS;
+      const arms = stride ? STRIDE_ARMS : PASS_ARMS;
+      if (far) {
+        drawLeg(ctx, ox, oy, legs.trail);
+        drawArm(ctx, ox, oy, arms.far);
+      } else {
+        drawLeg(ctx, ox, oy, legs.lead);
+        drawArm(ctx, ox, oy, arms.near);
+      }
       break;
     }
     case 'jump': {
-      drawLeg(ctx, ox, oy, { hip: 5, thighDx: 0, thighRows: 3, shinDx: -2, shinRows: 3 });
-      drawLeg(ctx, ox, oy, { hip: 11, thighDx: 0, thighRows: 3, shinDx: 2, shinRows: 3 });
-      drawArm(ctx, ox, oy, 1, 13, 2, 4);
-      drawArm(ctx, ox, oy, 17, 13, 2, 4);
+      if (far) {
+        drawLeg(ctx, ox, oy, { hip: 5, thighDx: -1, kneeDx: -2, lift: 2, far: true });
+        drawArm(ctx, ox, oy, { x: 4, y: 14, upperDx: -3, foreDx: 0, far: true, up: true });
+      } else {
+        drawLeg(ctx, ox, oy, { hip: 11, thighDx: 1, kneeDx: -2, lift: 2 });
+        drawArm(ctx, ox, oy, { x: 15, y: 14, upperDx: 3, foreDx: 0, up: true });
+      }
       break;
     }
     case 'dive': {
-      drawLeg(ctx, ox, oy, { hip: 4, thighDx: 0, thighRows: 4, shinDx: -3, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: -2, shinRows: 4 });
-      drawArm(ctx, ox, oy, 1, 18, 2, 3);
-      drawArm(ctx, ox, oy, 17, 18, 2, 3);
+      if (far) {
+        drawLeg(ctx, ox, oy, { hip: 5, thighDx: -2, kneeDx: -1, lift: 2, far: true });
+      } else {
+        drawLeg(ctx, ox, oy, { hip: 11, thighDx: -2, kneeDx: -2, lift: 1 });
+        drawArm(ctx, ox, oy, { x: 4, y: 14, upperDx: 3, foreDx: 2, far: true });
+        drawArm(ctx, ox, oy, { x: 15, y: 14, upperDx: 2, foreDx: 1 });
+      }
       break;
     }
     case 'cheer': {
-      drawLeg(ctx, ox, oy, { hip: 6, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
-      const swap = f % 2;
-      const leftY = 4 + swap;
-      const rightY = 5 - swap;
-      drawArm(ctx, ox, oy, 1, leftY, 2, 13 - leftY, true);
-      drawArm(ctx, ox, oy, 17, rightY, 2, 13 - rightY, true);
+      if (far) {
+        drawLeg(ctx, ox, oy, { hip: 5, thighDx: 0, kneeDx: 0, lift: 0, far: true });
+        if (f % 2 === 0) {
+          drawArm(ctx, ox, oy, { x: 4, y: 14, upperDx: -3, foreDx: 0, far: true, up: true });
+        } else {
+          drawArm(ctx, ox, oy, { x: 4, y: 14, upperDx: -2, foreDx: -1, far: true, up: true });
+        }
+      } else {
+        drawLeg(ctx, ox, oy, { hip: 11, thighDx: 0, kneeDx: 0, lift: 0 });
+        if (f % 2 === 0) {
+          drawArm(ctx, ox, oy, { x: 15, y: 14, upperDx: 3, foreDx: 0, up: true });
+        } else {
+          drawArm(ctx, ox, oy, { x: 15, y: 14, upperDx: 2, foreDx: 1, up: true });
+        }
+      }
       break;
     }
     case 'idle': {
-      drawLeg(ctx, ox, oy, { hip: 6, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
-      drawArm(ctx, ox, oy, 1, 16, 2, 3);
-      drawArm(ctx, ox, oy, 17, 16, 2, 3);
+      if (far) {
+        drawLeg(ctx, ox, oy, { hip: 5, thighDx: 0, kneeDx: 0, lift: 0, far: true });
+        drawArm(ctx, ox, oy, { x: 4, y: 14, upperDx: -1, foreDx: 0, far: true });
+      } else {
+        drawLeg(ctx, ox, oy, { hip: 11, thighDx: 0, kneeDx: 0, lift: 0 });
+        drawArm(ctx, ox, oy, { x: 15, y: 14, upperDx: 1, foreDx: 0 });
+      }
       break;
     }
   }
@@ -227,8 +295,9 @@ export function buildLariSpriteSheet(): LariSpriteSheet {
   FRAME_ORDER.forEach((frame, i) => {
     const ox = i * SPRITE_W;
     const bob = frame.pose === 'run' && frame.f % 2 === 1 ? -1 : 0;
+    drawPose(ctx, ox, bob, frame.pose, frame.f, 'far');
     drawBase(ctx, ox, bob);
-    drawPose(ctx, ox, bob, frame.pose, frame.f);
+    drawPose(ctx, ox, bob, frame.pose, frame.f, 'near');
   });
   return { canvas, frameCount: FRAME_ORDER.length };
 }

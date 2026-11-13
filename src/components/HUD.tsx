@@ -24,7 +24,11 @@ const PHASE_RESULT_LABEL: Record<PhaseResult['phase'], string> = {
 
 const TOASTY_LINES = ['REFAÇA O EXAME!', 'LAUDO REPROVADO!'];
 
-/** Lari 2D animada em pixel art, renderizada no mesmo plano dos menus. */
+/**
+ * Lari 2D no mesmo plano dos menus. Membros ficam parados dentro do frame —
+ * o movimento vem da física: espera no chão, salto parabólico e squash de
+ * aterrissagem ancorado no pé (estilo personagem 2D clássico).
+ */
 function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
   const sheet: LariSpriteSheet = useMemo(() => buildLariSpriteSheet(), []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,20 +38,13 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    let raf = 0;
-    let t = 0;
-    const draw = (): void => {
-      t += 1 / 60;
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      let frame: number;
-      if (grade === 'A' || grade === 'B') {
-        frame = LARI_FRAMES.cheer[Math.floor(t * 6) % 2];
-      } else if (grade === 'C') {
-        frame = LARI_FRAMES.run[Math.floor(t * 5) % 4];
-      } else {
-        frame = LARI_FRAMES.idle;
-      }
+    const W = SPRITE_W * 4;
+    const H = SPRITE_H * 4;
+    const IDLE_T = 0.65;
+    const AIR_T = 0.8;
+    const SQUASH_T = 0.22;
+    const CYCLE = IDLE_T + AIR_T + SQUASH_T;
+    const drawFrame = (frame: number, dy = 0): void => {
       ctx.drawImage(
         sheet.canvas,
         frame * SPRITE_W,
@@ -55,15 +52,42 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
         SPRITE_W,
         SPRITE_H,
         0,
-        0,
-        canvas.width,
-        canvas.height,
+        dy,
+        W,
+        H,
       );
-      if (grade === 'D') {
+    };
+    let raf = 0;
+    const start = performance.now();
+    const draw = (): void => {
+      const t = (performance.now() - start) / 1000;
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, W, H);
+      if (grade === 'A' || grade === 'B') {
+        const p = t % CYCLE;
+        if (p < IDLE_T) {
+          drawFrame(LARI_FRAMES.idle);
+        } else if (p < IDLE_T + AIR_T) {
+          const q = (p - IDLE_T) / AIR_T;
+          drawFrame(LARI_FRAMES.jump, -26 * 4 * q * (1 - q));
+        } else {
+          const q = (p - IDLE_T - AIR_T) / SQUASH_T;
+          const s = Math.sin(q * Math.PI);
+          ctx.save();
+          ctx.translate(0, H);
+          ctx.scale(1 + 0.18 * s, 1 - 0.22 * s);
+          ctx.translate(0, -H);
+          drawFrame(LARI_FRAMES.idle);
+          ctx.restore();
+        }
+      } else if (grade === 'C') {
+        drawFrame(LARI_FRAMES.run[Math.floor(t * 5) % 4]);
+      } else {
+        drawFrame(LARI_FRAMES.idle);
         const bob = Math.sin(t * 8) * 2;
         ctx.fillStyle = '#7fd8ff';
-        ctx.fillRect(canvas.width * 0.82, canvas.height * 0.16 + bob, 4, 7);
-        ctx.fillRect(canvas.width * 0.1, canvas.height * 0.2 - bob, 4, 7);
+        ctx.fillRect(W * 0.82, H * 0.16 + bob, 4, 7);
+        ctx.fillRect(W * 0.1, H * 0.2 - bob, 4, 7);
       }
       raf = requestAnimationFrame(draw);
     };
