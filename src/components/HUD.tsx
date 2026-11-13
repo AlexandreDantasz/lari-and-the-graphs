@@ -1,6 +1,14 @@
-import { MutableRefObject } from 'react';
+import { MutableRefObject, useEffect, useMemo, useRef } from 'react';
 import { GameEngine } from '../game/engine';
 import { HudState, PHASES, PhaseResult } from '../game/types';
+import { buildToastyPortrait } from '../game/sprites/toasty';
+import {
+  buildLariSpriteSheet,
+  LARI_FRAMES,
+  LariSpriteSheet,
+  SPRITE_H,
+  SPRITE_W,
+} from '../game/sprites/lari';
 
 interface Props {
   state: HudState;
@@ -13,10 +21,87 @@ const PHASE_RESULT_LABEL: Record<PhaseResult['phase'], string> = {
   reflexo: 'Reflexo Estapediano',
 };
 
-function patientFace(irritation: number): string {
-  if (irritation < 30) return '😊';
-  if (irritation < 65) return '😐';
-  return '😠';
+const TOASTY_LINES = ['REFAÇA O EXAME!', 'LAUDO REPROVADO!'];
+
+/** Lari 2D animada em pixel art, renderizada no mesmo plano dos menus. */
+function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
+  const sheet: LariSpriteSheet = useMemo(() => buildLariSpriteSheet(), []);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    let raf = 0;
+    let t = 0;
+    const draw = (): void => {
+      t += 1 / 60;
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let frame: number;
+      if (grade === 'A' || grade === 'B') {
+        frame = LARI_FRAMES.cheer[Math.floor(t * 6) % 2];
+      } else if (grade === 'C') {
+        frame = LARI_FRAMES.run[Math.floor(t * 5) % 4];
+      } else {
+        frame = LARI_FRAMES.idle;
+      }
+      ctx.drawImage(
+        sheet.canvas,
+        frame * SPRITE_W,
+        0,
+        SPRITE_W,
+        SPRITE_H,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
+      if (grade === 'D') {
+        const bob = Math.sin(t * 8) * 2;
+        ctx.fillStyle = '#7fd8ff';
+        ctx.fillRect(canvas.width * 0.82, canvas.height * 0.16 + bob, 4, 7);
+        ctx.fillRect(canvas.width * 0.1, canvas.height * 0.2 - bob, 4, 7);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [grade, sheet]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={SPRITE_W * 4}
+      height={SPRITE_H * 4}
+      className="lari-portrait"
+      style={{ width: size }}
+      aria-label={`Lari ${grade}`}
+    />
+  );
+}
+
+function CredibilityMeter({ state }: { state: HudState }) {
+  const face = state.credibility > 65 ? '😊' : state.credibility > 35 ? '😐' : '😠';
+  const moodLabel =
+    state.lariMood === 'happy'
+      ? 'Lari feliz!'
+      : state.lariMood === 'neutral'
+        ? 'Lari atenta'
+        : 'Lari nervosa!';
+  const cls =
+    state.credibility <= 35 ? 'danger' : state.credibility <= 65 ? 'warn' : '';
+  return (
+    <div className="credibility-meter">
+      <span className="credibility-face">{face}</span>
+      <div className="credibility-track">
+        <div className={`credibility-fill ${cls}`} style={{ width: `${Math.round(state.credibility)}%` }} />
+        <span className="credibility-label">Credibilidade do Laudo</span>
+      </div>
+      <span className="credibility-mood">{moodLabel}</span>
+    </div>
+  );
 }
 
 function TopBar({ state, engineRef }: Props) {
@@ -45,23 +130,6 @@ function TopBar({ state, engineRef }: Props) {
   );
 }
 
-function PatienceMeter({ state }: { state: HudState }) {
-  const moodLabel =
-    state.lariMood === 'happy' ? 'Lari feliz!' : state.lariMood === 'neutral' ? 'Lari atenta' : 'Lari nervosa!';
-  return (
-    <div className="patience-meter">
-      <span className="patience-face">{patientFace(state.irritation)}</span>
-      <div className="patience-track">
-        <div
-          className={`patience-fill ${state.irritation > 65 ? 'danger' : state.irritation > 30 ? 'warn' : ''}`}
-          style={{ width: `${Math.round(state.irritation)}%` }}
-        />
-      </div>
-      <span className="patience-mood">{moodLabel}</span>
-    </div>
-  );
-}
-
 function ProgressBar({ progress }: { progress: number }) {
   return (
     <div className="progress-track">
@@ -82,18 +150,35 @@ function MessageToast({ state }: { state: HudState }) {
   );
 }
 
+/** Easter egg estilo "Toasty!": retrato pixel art da professora avaliadora. */
+function Toasty({ toastKey }: { toastKey: number }) {
+  const portrait = useMemo(() => buildToastyPortrait().dataUrl, []);
+  return (
+    <div key={toastKey} className="toasty" role="img" aria-label="Toasty!">
+      <img src={portrait} alt="Professora avaliadora" className="toasty-img" />
+      <span className="toasty-text">{TOASTY_LINES[toastKey % TOASTY_LINES.length]}</span>
+    </div>
+  );
+}
+
 function MenuScreen({ engineRef, hasTouch }: { engineRef: Props['engineRef']; hasTouch: boolean }) {
   return (
     <div className="overlay">
-      <h1 className="game-title">
-        Lari <span className="amp">&amp;</span> The Graphs
-      </h1>
-      <p className="tagline">Corra sobre audiogramas, calibre timpanogramas e bloqueie reflexos!</p>
+      <div className="menu-hero">
+        <LariPortrait grade="A" size={84} />
+        <div>
+          <h1 className="game-title">
+            Lari <span className="amp">&amp;</span> The Graphs
+          </h1>
+          <p className="tagline">Corra sobre audiogramas, calibre timpanogramas e bloqueie reflexos!</p>
+        </div>
+      </div>
       <ul className="menu-list">
-        <li>🎧 Fase 1 — Audiometria Tonal: salte os limiares auditivos</li>
+        <li>🎧 Fase 1 — Audiometria Tonal: registre os limiares sem falso-positivos</li>
         <li>📈 Fase 2 — Timpanometria: calibre a pressão nos 5 tipos de Jerger</li>
-        <li>🛡️ Fase 3 — Reflexo Estapediano: bloqueie as ondas sonoras</li>
-        <li>😠 Erre demais e o paciente encerra o exame!</li>
+        <li>🛡️ Fase 3 — Reflexo Estapediano: bloqueie só as ondas presentes</li>
+        <li>⚠️ Erros derrubam a Credibilidade do Laudo — a 0% o exame é invalidado!</li>
+        <li>📝 Ao fim de cada gráfico, acerte o diagnóstico do laudo (ou Game Over!)</li>
       </ul>
       <p className="controls-hint">
         {hasTouch
@@ -123,6 +208,31 @@ function PhaseIntroScreen({
       <button className="primary-btn" onClick={() => engineRef.current?.confirmPhaseIntro()}>
         Preparar! (ou toque na tela)
       </button>
+    </div>
+  );
+}
+
+function QuizScreen({ state, engineRef }: { state: HudState; engineRef: Props['engineRef'] }) {
+  const quiz = state.quiz;
+  if (!quiz) return null;
+  const labels = ['A', 'B', 'C'];
+  return (
+    <div className="overlay quiz-overlay">
+      <h2>📝 Laudo do Paciente</h2>
+      <p className="quiz-question">{quiz.question}</p>
+      <div className="quiz-options">
+        {quiz.options.map((option, i) => (
+          <button
+            key={option}
+            className="quiz-option"
+            onClick={() => engineRef.current?.answerQuiz(i)}
+          >
+            <span className="quiz-letter">{labels[i] ?? '?'}</span>
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="quiz-warning">⚠ Diagnóstico errado = Game Over imediato!</p>
     </div>
   );
 }
@@ -165,7 +275,7 @@ function PhaseResultsScreen({
           ? '📋 Laudo impecável! O paciente saiu sorrindo. 💖'
           : accuracy >= 50
             ? '📋 Laudo bom — revise os limiares duvidosos.'
-            : '📋 Laudo com ressalvas… o paciente quase perdeu a paciência!'}
+            : '📋 Laudo com ressalvas… a credibilidade sofreu!'}
       </p>
       <button
         className="primary-btn"
@@ -186,12 +296,9 @@ function GameOverScreen({
 }) {
   return (
     <div className="overlay game-over">
-      <h2>😠 Exame interrompido!</h2>
-      <p className="instructions">
-        O paciente perdeu a paciência com tantos erros e encerrou o exame.
-        <br />
-        Respire fundo, revise o procedimento e tente de novo — a Lari confia em você!
-      </p>
+      <Toasty toastKey={state.toastyKey} />
+      <h2>😱 Exame reprovado!</h2>
+      <p className="instructions game-over-reason">{state.gameOverReason}</p>
       <div className="results-grid">
         <div className="result-item">
           <span className="value">{state.hits}</span>
@@ -230,7 +337,10 @@ function FinalReportScreen({
   const grade = accuracy >= 85 ? 'A' : accuracy >= 70 ? 'B' : accuracy >= 50 ? 'C' : 'D';
   return (
     <div className="overlay">
-      <h2>📋 Laudo Final</h2>
+      <div className="menu-hero">
+        <LariPortrait grade={grade} size={88} />
+        <h2>📋 Laudo Final</h2>
+      </div>
       <div className="report-card">
         <p>
           Paciente: <strong>Lari</strong> · Fonoaudiologia
@@ -246,8 +356,12 @@ function FinalReportScreen({
         </p>
         <p className="laudo-note">
           {grade === 'A'
-            ? '🏆 Excelência clínica! A Lari é referência no consultório.'
-            : '💪 Continue treinando os exames audiológicos!'}
+            ? '🏆 Excelência clínica! A Lari comemora muito!'
+            : grade === 'B'
+              ? '💪 Bom trabalho! A Lari está animada para melhorar.'
+              : grade === 'C'
+                ? '😅 A Lari segue treinando os exames audiológicos…'
+                : '😰 A Lari ficou nervosa — bora revisar a matéria de audiologia!'}
         </p>
       </div>
       <button className="primary-btn" onClick={() => engineRef.current?.beginRun()}>
@@ -267,14 +381,14 @@ export function HUD({ state, engineRef }: Props) {
       {state.screen === 'playing' && (
         <>
           <TopBar state={state} engineRef={engineRef} />
-          <PatienceMeter state={state} />
+          <CredibilityMeter state={state} />
           <ProgressBar progress={state.progress} />
           <MessageToast state={state} />
           {state.phase === 'reflexo' && (
             <div className={`reflex-hint ${state.reflexGlow > 0.2 ? 'glow' : ''}`}>
               {state.isPortrait || state.hasTouch
-                ? 'Deslize ↑ quando brilhar!'
-                : 'Espaço/↑ quando brilhar!'}
+                ? 'Deslize ↑ quando o fone brilhar!'
+                : 'Espaço/↑ quando o fone brilhar!'}
             </div>
           )}
           {state.phase === 'timpanometria' && state.phaseHint && (
@@ -294,6 +408,7 @@ export function HUD({ state, engineRef }: Props) {
 
       {state.screen === 'menu' && <MenuScreen engineRef={engineRef} hasTouch={state.hasTouch} />}
       {state.screen === 'phaseIntro' && <PhaseIntroScreen state={state} engineRef={engineRef} />}
+      {state.screen === 'quiz' && <QuizScreen state={state} engineRef={engineRef} />}
       {state.screen === 'phaseResults' && (
         <PhaseResultsScreen state={state} engineRef={engineRef} />
       )}

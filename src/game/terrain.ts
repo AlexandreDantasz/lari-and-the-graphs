@@ -62,6 +62,7 @@ export function createAudiometryTerrain(seed: number, length: number): Terrain {
   const spacing = (length - x0 - 260) / (freqs.length - 1);
   const controls: ControlPoint[] = [{ x: 0, y: dbToY(10) }];
   const markers: Marker[] = [];
+  const gaps: Gap[] = [];
   let db = 10;
   freqs.forEach((_hz, i) => {
     const x = x0 + i * spacing;
@@ -74,6 +75,9 @@ export function createAudiometryTerrain(seed: number, length: number): Terrain {
     }
     db = clamp(db + delta, 0, 90);
     if (i > 0) db = Math.max(db, 5);
+    if (i > 0 && delta >= 25) {
+      gaps.push({ start: x - spacing * 0.22, end: x - spacing * 0.08 });
+    }
     controls.push({ x: x - spacing * 0.45, y: dbToY(db) + (rng() - 0.5) * 8 });
     controls.push({ x, y: dbToY(db) });
     markers.push({
@@ -83,14 +87,15 @@ export function createAudiometryTerrain(seed: number, length: number): Terrain {
       kind: 'threshold',
       hit: false,
       missed: false,
-      window: spacing * 0.16,
+      signaled: false,
+      window: spacing * 0.12,
     });
   });
   controls.push({ x: length, y: dbToY(5) });
   return buildTerrain(length, controls, markers, (x) => {
     const i = clamp(Math.round((x - x0) / spacing), 0, freqs.length - 1);
     return `${freqs[i]} Hz`;
-  });
+  }, gaps);
 }
 
 const TYPANO_TYPES = [
@@ -135,6 +140,7 @@ export function createTympanometryTerrain(seed: number, length: number): Terrain
       kind: 'peak',
       hit: false,
       missed: false,
+      signaled: false,
       window: segLen * 0.12,
     });
     if (id === 'B') {

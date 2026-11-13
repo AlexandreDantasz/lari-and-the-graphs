@@ -23,17 +23,66 @@ estudante de fonoaudiologia, corre e surfa sobre gráficos clínicos reais.
    e pulsante. Quando o fone do paciente 3D brilhar, deslize para cima (mobile) ou
    pressione `Espaço`/`↑` (desktop) para ativar o escudo do reflexo.
 
-## Paciente, humor e derrota
+## Credibilidade do Laudo, penalidades e quiz
 
-- Errar (limiares perdidos, ondas que acertam, traçado fora da faixa) **irrita o
-  paciente** — o medidor de paciência sobe e a expressão 3D muda (😊 → 😐 → 😠).
-- A **Lari reage ao humor**: fica nervosa (suor + corrida acelerada) quando o
-  paciente está irritado e feliz (corações) quando você encadeia acertos.
-- Uma **Lari 3D low-poly** acompanha tudo do consultório, comemorando acertos e
-  tremendo nos erros.
-- Se a paciência chegar a zero… **o paciente encerra o exame (game over)** — dê
-  "Repetir fase" para tentar de novo.
+O jogo agora tem **dificuldade real**: a barra de **Credibilidade do Laudo**
+começa em 100% e cai com cada erro clínico — chegando a **0%, o exame é
+invalidado (Game Over)**. Cada erro exibe um **alerta clínico** explicando o
+conceito de fonoaudiologia envolvido:
+
+| Erro | Fase | Penalidade |
+| --- | --- | --- |
+| Falso-positivo (tocar sem o paciente ter levantado a mão) | 1 | −20% |
+| Omissão (deixar de registrar um limiar sinalizado) | 1 | −20% |
+| Queda fora do traçado (não saltar a queda brusca/gap) | 1 | −25% |
+| Ruído mascarante (raios vermelhos no trajeto) | 1 | −25% |
+| Desvio da curva (fora da faixa tracejada) | 2 | −15%/s |
+| Falha de defesa (onda presente atinge a Lari) | 3 | −25% |
+| Falso reflexo (escudo sem resposta presente) | 3 | −25% |
+
+- A velocidade aumenta nas frequências agudas (4000/8000 Hz) e a janela de acerto
+  é mais estreita; os limiares sinalizados acendem em amarelo antes da janela
+  (o paciente 3D levanta a mão como aviso).
+- Na Fase 2, a complacência tem **física de 2ª ordem** (aceleração + arrasto):
+  segurar/soltar gera momento e o traçado desenha **arcos suaves**, capazes de
+  acompanhar as parábolas das curvas de Jerger.
+- Na Fase 3, as ondas podem ser **presentes** (bloqueie!) ou **ausentes**
+  (tracejadas e cinzas — não ative o escudo); o brilho no fone só acende para
+  respostas presentes.
+
+### Quiz do laudo
+
+Ao fim de cada gráfico o jogo pausa e mostra o **Laudo do Paciente**: 3 opções de
+diagnóstico baseadas no traçado jogado (ex.: "Perda neurossensorial em rampa",
+"Curva Timpanométrica Tipo C", "Integridade da via auditiva — VII e VIII pares").
+**Acertou: +400 pontos. Errou: Game Over imediato!**
+
+## Toasty! 🍞
+
+Todo Game Over dispara o easter egg estilo Mortal Kombat: a **professora
+avaliadora loira** (retrato pixel art procedural — óculos grandes, pérolas,
+blusa preta com renda) desliza pelo canto inferior direito com som retrô
+sintetizado e grita **"REFAÇA O EXAME!"** / **"LAUDO REPROVADO!"**, seguida do
+painel com o motivo clínico da reprovação.
+
+## Câmeras cinematográficas
+
+O diretor de câmera 3D alterna planos automaticamente durante o exame: **plano
+geral do consultório**, **close no rosto da Lari 3D** (também usado na
+conclusão de fase), **plano por trás do paciente** com a Lari operando o
+audiômetro ao fundo e **close da mesa do audiômetro** — tudo com transições
+suaves. A mesa foi rebaixada (tampo em y = 0,7) e a Lari 3D ampliada para que
+tronco, jaleco, braços e cabeça apareçam claramente.
+
+## Humor e animações
+
+- A **Lari reage à credibilidade**: nervosa (suor + corrida acelerada) abaixo de
+  35% e feliz (corações) acima de 65%; a Lari 3D e os pacientes 3D espelham o
+  humor em tempo real (mão levantada, comemoração, dúvida, raiva).
 - Ao completar uma fase, a Lari comemora soltando **corações pixelados**.
+- No **Laudo Final**, a Lari 2D anima conforme o conceito: comemora nos conceitos
+  A/B, corre no C e fica parada e suando no D — ao lado do painel, no mesmo
+  plano do menu.
 
 ## Stack
 

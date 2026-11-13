@@ -2,6 +2,8 @@ import * as THREE from 'three';
 
 type PatientKind = 'child' | 'adultWoman' | 'elderlyMan';
 
+type CameraShot = 'wide' | 'lariFace' | 'behindPatient' | 'audiometer';
+
 interface PatientAction {
   type: 'idle' | 'hand' | 'nod' | 'doubt';
   timer: number;
@@ -248,6 +250,8 @@ class Lari3D {
   private actionTimer = 0;
   private mood = 0;
   private elapsed = 0;
+  private readonly baseX = -4.45;
+  private readonly baseZ = -4.15;
 
   constructor() {
     const toon = (color: THREE.ColorRepresentation) => new THREE.MeshToonMaterial({ color });
@@ -323,8 +327,9 @@ class Lari3D {
     this.armR = makeArm(1);
 
     this.group.add(this.body);
-    this.group.position.set(-3.1, 0, -2.6);
-    this.group.rotation.y = 0.5;
+    this.group.position.set(this.baseX, 0, this.baseZ);
+    this.group.rotation.y = 0.18;
+    this.group.scale.setScalar(1.28);
   }
 
   celebrate(): void {
@@ -366,7 +371,7 @@ class Lari3D {
     }
 
     this.group.position.y = jump;
-    this.group.position.x = -3.1 + tremble;
+    this.group.position.x = this.baseX + tremble;
     this.armL.rotation.z += (-armLift - this.armL.rotation.z) * Math.min(1, dt * 10);
     this.armR.rotation.z += (armLift - this.armR.rotation.z) * Math.min(1, dt * 10);
   }
@@ -394,6 +399,19 @@ export class ClinicScene {
   private elapsed = 0;
   private glow = 0;
   private progress = 0;
+  private shot: CameraShot = 'wide';
+  private shotIndex = 0;
+  private shotTimer = 0;
+  private readonly shotDuration = 9;
+  private readonly shotOrder: CameraShot[] = [
+    'wide',
+    'lariFace',
+    'behindPatient',
+    'wide',
+    'audiometer',
+  ];
+  private camPos = new THREE.Vector3(0, 2.4, 6.5);
+  private camTarget = new THREE.Vector3(0, 1.4, -6);
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -496,24 +514,24 @@ export class ClinicScene {
     boothTop.position.set(0, 5.1, -8);
     this.scene.add(boothTop);
 
-    const desk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.16, 1.2), toon('#8a6f52'));
-    desk.position.set(-5.2, 1.5, -3.4);
+    const desk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 1.2), toon('#8a6f52'));
+    desk.position.set(-5.2, 0.7, -3.4);
     this.scene.add(desk);
     for (const [dx, dz] of [[-1.5, -0.4], [1.5, -0.4], [-1.5, 0.4], [1.5, 0.4]] as const) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.5, 0.12), toon('#6e5a42'));
-      leg.position.set(-5.2 + dx, 0.75, -3.4 + dz);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.7, 0.12), toon('#6e5a42'));
+      leg.position.set(-5.2 + dx, 0.35, -3.4 + dz);
       this.scene.add(leg);
     }
-    const audiometer = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.34, 0.7), toon('#d7dbe4'));
-    audiometer.position.set(-5.2, 1.75, -3.4);
+    const audiometer = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.3, 0.7), toon('#d7dbe4'));
+    audiometer.position.set(-5.2, 0.92, -3.4);
     this.scene.add(audiometer);
     for (let i = 0; i < 5; i++) {
       const knob = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.06, 0.06, 10),
+        new THREE.CylinderGeometry(0.055, 0.055, 0.055, 10),
         toon(i % 2 === 0 ? '#d94848' : '#4f7fb0'),
       );
       knob.rotation.x = Math.PI / 2;
-      knob.position.set(-5.65 + i * 0.22, 1.78, -3.05);
+      knob.position.set(-5.65 + i * 0.22, 0.95, -3.08);
       this.scene.add(knob);
     }
 
@@ -533,27 +551,83 @@ export class ClinicScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(1, height);
-    this.applyCamera();
+    this.camera.updateProjectionMatrix();
   }
 
-  private applyCamera(): void {
+  /** Câmera cinematográfica: close no rosto da Lari 3D. */
+  focusLari(): void {
+    this.shot = 'lariFace';
+    this.shotTimer = 0;
+  }
+
+  /** Volta para o plano geral e reinicia o ciclo de câmeras. */
+  resetCamera(): void {
+    this.shot = 'wide';
+    this.shotIndex = 0;
+    this.shotTimer = 0;
+  }
+
+  /** Enquadramento desejado do plano atual (função do progresso e da orientação). */
+  private desiredCamera(): { pos: THREE.Vector3; target: THREE.Vector3; fov: number } {
     const drift = Math.sin(this.progress * Math.PI) * 1.5;
-    if (this.portrait) {
-      this.camera.fov = 58;
-      this.camera.position.set(drift * 0.4, 2.1, 5.6 - this.progress * 0.5);
-      this.camera.lookAt(drift * 0.2, 0.4, -6);
-    } else {
-      this.camera.fov = 50;
-      this.camera.position.set(drift, 2.6, 8.2 - this.progress * 0.9);
-      this.camera.lookAt(drift * 0.5, 1.5, -6);
+    if (this.shot === 'lariFace') {
+      return {
+        pos: new THREE.Vector3(-3.0 + drift * 0.08, 2.05, -2.45),
+        target: new THREE.Vector3(-4.45, 1.95, -4.15),
+        fov: 42,
+      };
     }
+    if (this.shot === 'behindPatient') {
+      const p = this.patients[1].group.position;
+      const dir = new THREE.Vector3(-4.45 - p.x, 0, -4.15 - p.z).normalize();
+      return {
+        pos: new THREE.Vector3(p.x - dir.x * 2.3, 1.95, p.z - dir.z * 2.3),
+        target: new THREE.Vector3(-4.45, 1.35, -4.15),
+        fov: 48,
+      };
+    }
+    if (this.shot === 'audiometer') {
+      return {
+        pos: new THREE.Vector3(-3.85, 1.65, -1.65),
+        target: new THREE.Vector3(-5.15, 0.85, -3.4),
+        fov: 44,
+      };
+    }
+    if (this.portrait) {
+      return {
+        pos: new THREE.Vector3(drift * 0.4, 2.1, 5.6 - this.progress * 0.5),
+        target: new THREE.Vector3(drift * 0.2, 0.4, -6),
+        fov: 58,
+      };
+    }
+    return {
+      pos: new THREE.Vector3(drift, 2.6, 8.2 - this.progress * 0.9),
+      target: new THREE.Vector3(drift * 0.5, 1.5, -6),
+      fov: 50,
+    };
+  }
+
+  /** Diretor de câmera: alterna planos periodicamente com transições suaves. */
+  private updateCamera(dt: number): void {
+    this.shotTimer += dt;
+    if (this.shotTimer >= this.shotDuration) {
+      this.shotTimer = 0;
+      this.shotIndex = (this.shotIndex + 1) % this.shotOrder.length;
+      this.shot = this.shotOrder[this.shotIndex];
+    }
+    const want = this.desiredCamera();
+    const k = Math.min(1, dt * 1.6);
+    this.camPos.lerp(want.pos, k);
+    this.camTarget.lerp(want.target, k);
+    this.camera.fov += (want.fov - this.camera.fov) * k;
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
     this.camera.updateProjectionMatrix();
   }
 
   /** Cenário evolui com o avanço da fase: luz de janela, painéis e câmera. */
   setProgress(progress: number, phase: 'audiometria' | 'timpanometria' | 'reflexo'): void {
     this.progress = Math.min(1, Math.max(0, progress));
-    this.applyCamera();
 
     const stage = this.progress;
     const skyStages =
@@ -617,6 +691,7 @@ export class ClinicScene {
 
   update(dt: number): void {
     this.elapsed += dt;
+    this.updateCamera(dt);
     this.patients.forEach((p, i) => {
       p.update(dt);
       p.group.position.y = Math.sin(this.elapsed * 1.6 + i * 1.7) * 0.02;

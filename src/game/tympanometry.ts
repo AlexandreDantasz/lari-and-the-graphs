@@ -23,6 +23,16 @@ export interface JergerSpec {
   hint: string;
 }
 
+/**
+ * Física da complacência (2ª ordem): segurar acelera a subida, soltar acelera a
+ * descida, e o arrasto dá momento — o traçado sai de retas e passa a desenhar
+ * arcos suaves, capazes de acompanhar as parábolas das curvas de Jerger.
+ */
+const HOLD_ACCEL = 3.4;
+const RELEASE_ACCEL = 4.0;
+const DRAG = 3.0;
+const MAX_RATE = 1.5;
+
 export const JERGER_SPECS: JergerSpec[] = [
   {
     id: 'A',
@@ -53,7 +63,7 @@ export const JERGER_SPECS: JergerSpec[] = [
     peak: 0,
     width: 72,
     tol: 0.06,
-    sweepSpeed: 105,
+    sweepSpeed: 96,
     passRatio: 0.5,
     hint: 'Pico muito alto e estreito: segure no timing exato do centro!',
   },
@@ -113,6 +123,7 @@ export class TympScan {
   private breakTimer = 0;
   private pressure = TYMP_P_MIN;
   private compliance = 0.02;
+  private velocity = 0;
   private holding = false;
   private trace: TracePoint[] = [];
   private inBandTime = 0;
@@ -193,11 +204,12 @@ export class TympScan {
     if (this.state === 'done') return null;
 
     this.pressure += this.spec.sweepSpeed * dt;
-    this.compliance = clamp(
-      this.compliance + (this.holding ? 0.55 : -0.75) * dt,
-      0.02,
-      1.05,
-    );
+    this.velocity += (this.holding ? HOLD_ACCEL : -RELEASE_ACCEL) * dt;
+    this.velocity -= this.velocity * DRAG * dt;
+    this.velocity = clamp(this.velocity, -MAX_RATE, MAX_RATE);
+    this.compliance = clamp(this.compliance + this.velocity * dt, 0.02, 1.05);
+    if (this.compliance <= 0.02 && this.velocity < 0) this.velocity = 0;
+    if (this.compliance >= 1.05 && this.velocity > 0) this.velocity = 0;
 
     const target = targetCompliance(this.spec, this.pressure);
     const inBand = Math.abs(this.compliance - target) <= this.spec.tol;
@@ -234,6 +246,7 @@ export class TympScan {
     this.state = 'sweeping';
     this.pressure = TYMP_P_MIN;
     this.compliance = 0.02;
+    this.velocity = 0;
     this.trace = [];
     this.inBandTime = 0;
     this.totalTime = 0;

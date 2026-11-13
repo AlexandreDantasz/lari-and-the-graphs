@@ -4,6 +4,7 @@ export type GameScreen =
   | 'menu'
   | 'phaseIntro'
   | 'playing'
+  | 'quiz'
   | 'phaseResults'
   | 'finalReport'
   | 'gameOver';
@@ -37,9 +38,12 @@ export interface HudState {
   isPortrait: boolean;
   hasTouch: boolean;
   muted: boolean;
-  irritation: number;
+  credibility: number;
   lariMood: LariMood;
   phaseHint: string;
+  quiz: QuizData | null;
+  gameOverReason: string;
+  toastyKey: number;
 }
 
 export interface PhaseConfig {
@@ -57,6 +61,7 @@ export interface Marker {
   kind: 'threshold' | 'peak' | 'reflex';
   hit: boolean;
   missed: boolean;
+  signaled: boolean;
   window: number;
 }
 
@@ -66,7 +71,15 @@ export interface Wave {
   speed: number;
   radius: number;
   blocked: boolean;
+  present: boolean;
   phase: number;
+}
+
+export interface QuizData {
+  question: string;
+  options: string[];
+  correct: number;
+  explain: string;
 }
 
 export const PHASES: Record<PhaseId, PhaseConfig> = {

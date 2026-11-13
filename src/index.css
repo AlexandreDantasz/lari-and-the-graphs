@@ -164,8 +164,8 @@ body,
   right: 14px;
 }
 
-/* ---------- Paciência / humor ---------- */
-.patience-meter {
+/* ---------- Credibilidade do Laudo / humor ---------- */
+.credibility-meter {
   position: absolute;
   top: 60px;
   right: 12px;
@@ -178,30 +178,45 @@ body,
   padding: 4px 10px;
 }
 
-.patience-face {
+.credibility-face {
   font-size: 16px;
 }
 
-.patience-track {
-  width: 90px;
+.credibility-track {
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.credibility-label {
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.credibility-bar {
+  width: 100%;
   height: 7px;
   border-radius: 4px;
   background: rgba(120, 160, 255, 0.18);
   overflow: hidden;
 }
 
-.patience-fill {
-  height: 100%;
+.credibility-fill {
+  height: 7px;
   border-radius: 4px;
   background: linear-gradient(90deg, #57e389, #a8e86b);
   transition: width 0.2s ease;
 }
 
-.patience-fill.warn {
+.credibility-fill.warn {
   background: linear-gradient(90deg, #ffcf4d, #ffa54d);
 }
 
-.patience-fill.danger {
+.credibility-fill.danger {
   background: linear-gradient(90deg, #ff7a5f, #ff4d4d);
   animation: danger-blink 0.6s ease-in-out infinite alternate;
 }
@@ -215,7 +230,7 @@ body,
   }
 }
 
-.patience-mood {
+.credibility-mood {
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
@@ -523,14 +538,17 @@ body,
   .freq-label {
     font-size: 11px;
   }
-  .patience-meter {
+  .credibility-meter {
     top: 52px;
     padding: 3px 8px;
   }
-  .patience-track {
+  .credibility-track {
     width: 64px;
   }
-  .patience-mood {
+  .credibility-label {
+    display: none;
+  }
+  .credibility-mood {
     display: none;
   }
   .icon-btn {
@@ -589,4 +607,156 @@ body,
     flex-wrap: wrap;
     gap: 4px 18px;
   }
+}
+
+/* ---------- Quiz do laudo ---------- */
+.quiz-overlay {
+  gap: 14px;
+}
+
+.quiz-question {
+  font-size: 16px;
+  font-weight: 700;
+  max-width: 520px;
+  text-align: center;
+}
+
+.quiz-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(92vw, 480px);
+}
+
+.quiz-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 12px 14px;
+  min-height: 48px;
+  background: rgba(20, 27, 50, 0.85);
+  border: 1px solid rgba(120, 160, 255, 0.35);
+  border-radius: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.1s ease, background 0.15s ease;
+}
+
+.quiz-option:hover {
+  border-color: #7fd8ff;
+  background: rgba(35, 48, 90, 0.9);
+  transform: translateY(-1px);
+}
+
+.quiz-option:active {
+  transform: scale(0.98);
+}
+
+.quiz-letter {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgba(127, 216, 255, 0.18);
+  border: 1px solid rgba(127, 216, 255, 0.5);
+  font-weight: 800;
+  font-size: 13px;
+  color: #7fd8ff;
+}
+
+.quiz-warning {
+  font-size: 11px;
+  color: #ffb36b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ---------- Lari 2D nos menus / laudo final ---------- */
+.menu-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.lari-portrait {
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
+
+/* ---------- Toasty! (easter egg de Game Over) ---------- */
+.toasty {
+  position: fixed;
+  right: 0;
+  bottom: 12vh;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 10px 10px;
+  background: rgba(12, 8, 20, 0.92);
+  border: 2px solid #ffd54a;
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  box-shadow: 0 0 24px rgba(255, 213, 74, 0.45);
+  animation: toasty-in 2.6s ease forwards;
+  pointer-events: none;
+}
+
+.toasty-img {
+  width: 84px;
+  height: auto;
+  image-rendering: pixelated;
+  border: 2px solid rgba(255, 213, 74, 0.6);
+  border-radius: 8px;
+}
+
+.toasty-text {
+  font-family: 'Courier New', monospace;
+  font-weight: 900;
+  font-size: 17px;
+  letter-spacing: 0.06em;
+  color: #ffd54a;
+  text-shadow: 2px 2px 0 #a83a3a, 4px 4px 0 rgba(0, 0, 0, 0.6);
+  animation: toasty-shout 0.5s steps(2) 3;
+}
+
+@keyframes toasty-in {
+  0% {
+    transform: translateX(120%);
+  }
+  12% {
+    transform: translateX(0);
+  }
+  82% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+
+@keyframes toasty-shout {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.game-over-reason {
+  color: #ffb3b3;
+  font-weight: 600;
+  max-width: min(92vw, 520px);
 }

@@ -21,9 +21,12 @@ const INITIAL_STATE: HudState = {
   isPortrait: false,
   hasTouch: false,
   muted: false,
-  irritation: 0,
+  credibility: 100,
   lariMood: 'happy' as const,
   phaseHint: '',
+  quiz: null,
+  gameOverReason: '',
+  toastyKey: 0,
 };
 
 export default function App() {

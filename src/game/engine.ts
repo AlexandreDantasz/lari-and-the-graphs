@@ -3,7 +3,7 @@ import { InputController } from './input';
 import { createAudiometryTerrain, createReflexTerrain, Terrain } from './terrain';
 import { buildLariSpriteSheet, LARI_FRAMES, LariSpriteSheet, SPRITE_H, SPRITE_W } from './sprites/lari';
 import { ClinicScene } from './three/clinic';
-import { TympScan } from './tympanometry';
+import { TympScan, targetCompliance, JergerId, JERGER_SPECS } from './tympanometry';
 import {
   FREQUENCIES_HZ,
   HudState,
@@ -12,6 +12,7 @@ import {
   PHASES,
   PhaseId,
   PhaseResult,
+  QuizData,
   Wave,
 } from './types';
 import { clamp, lerp, makeRng } from './utils';
@@ -24,6 +25,7 @@ interface Particle {
   life: number;
   maxLife: number;
   color: string;
+  screenSpace: boolean;
 }
 
 interface Heart {
@@ -40,6 +42,12 @@ interface Collectible {
   x: number;
   y: number;
   taken: boolean;
+}
+
+interface NoiseObstacle {
+  x: number;
+  y: number;
+  hit: boolean;
 }
 
 interface LariState {
@@ -64,18 +72,41 @@ const DIVE_GRAVITY = 2600;
 const JUMP_V = 580;
 const BOOST_V = 660;
 const BASE_SPEED = 250;
-const MAX_SPEED = 620;
+const MAX_SPEED = 640;
 
-const IRRITATION_ON_MISS = 12;
-const IRRITATION_ON_WAVE_HIT = 14;
-const IRRITATION_ON_GAP_FALL = 10;
-const IRRITATION_ON_OSCILLATION = 8;
-const IRRITATION_DECAY = 0.8;
-const IRRITATION_MAX = 100;
+const CRED_MAX = 100;
+const PENALTY_FALSE_POSITIVE = 20;
+const PENALTY_OMISSION = 20;
+const PENALTY_FALL = 25;
+const PENALTY_OBSTACLE = 25;
+const PENALTY_TYMP_DRAIN = 15;
+const PENALTY_WAVE_MISS = 25;
+const PENALTY_FALSE_REFLEX = 25;
 
 const PHASE_ORDER: PhaseId[] = ['audiometria', 'timpanometria', 'reflexo'];
 
 const HEART_MATRIX = ['.X.X.', 'XXXXX', 'XXXXX', '.XXX.', '..X..'];
+
+const DIAGNOSIS_POOL = [
+  'Perda neurossensorial em rampa (pior nos agudos)',
+  'Audição normal (limiares ≤ 20 dB)',
+  'Perda auditiva leve e difusa',
+  'Perda condutiva com gap aéreo-ósseo',
+];
+
+function jergerOption(id: JergerId): string {
+  const spec = JERGER_SPECS.find((s) => s.id === id);
+  return spec ? `Curva Timpanométrica ${spec.name}` : `Curva Timpanométrica Tipo ${id}`;
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 
 export class GameEngine {
   private container: HTMLElement;
@@ -116,16 +147,18 @@ export class GameEngine {
   private animTime = 0;
   private cheerTimer = 0;
   private shieldTimer = 0;
+  private shieldUsed = false;
   private waves: Wave[] = [];
   private waveTimer = 0;
   private waveInterval = 1.7;
   private particles: Particle[] = [];
   private hearts: Heart[] = [];
   private collectibles: Collectible[] = [];
+  private obstacles: NoiseObstacle[] = [];
   private lastFreqIndex = -1;
   private phaseSeed = 7;
 
-  private irritation = 0;
+  private credibility = CRED_MAX;
   private score = 0;
   private hits = 0;
   private misses = 0;
@@ -133,6 +166,9 @@ export class GameEngine {
   private perfectCount = 0;
   private maxSpeedSeen = 0;
   private results: PhaseResult[] = [];
+  private quiz: QuizData | null = null;
+  private gameOverReason = '';
+  private toastyKey = 0;
   private message = '';
   private messageTimer = 0;
   private messageKey = 0;
@@ -210,7 +246,9 @@ export class GameEngine {
     this.misses = 0;
     this.combo = 1;
     this.perfectCount = 0;
-    this.irritation = 0;
+    this.credibility = CRED_MAX;
+    this.quiz = null;
+    this.gameOverReason = '';
     this.results = [];
     this.phaseIndex = 0;
     this.startPhase('audiometria');
@@ -228,9 +266,29 @@ export class GameEngine {
     this.startPhase(next);
   }
 
+  answerQuiz(index: number): void {
+    if (this.screen !== 'quiz' || !this.quiz) return;
+    if (index === this.quiz.correct) {
+      this.score += 400;
+      this.setMessage('\u2705 Diagnóstico correto! Laudo assinado (+400)', 1.8);
+      this.quiz = null;
+      this.screen = 'phaseResults';
+      this.spawnHearts(3);
+      this.synth.phaseComplete();
+      this.pushState(true);
+    } else {
+      const correct = this.quiz.options[this.quiz.correct];
+      this.doGameOver(
+        `Laudo reprovado! Você escolheu o diagnóstico errado. Correto: "${correct}". ${this.quiz.explain}`,
+      );
+    }
+  }
+
   retryPhase(): void {
     this.synth.unlock();
-    this.irritation = 35;
+    this.credibility = 60;
+    this.quiz = null;
+    this.gameOverReason = '';
     this.hits = 0;
     this.misses = 0;
     this.combo = 1;
@@ -240,7 +298,9 @@ export class GameEngine {
 
   backToMenu(): void {
     this.screen = 'menu';
-    this.irritation = 0;
+    this.credibility = CRED_MAX;
+    this.quiz = null;
+    this.gameOverReason = '';
     this.pushState(true);
   }
 
@@ -286,11 +346,15 @@ export class GameEngine {
     this.waveTimer = 0;
     this.waveInterval = 1.7;
     this.shieldTimer = 0;
+    this.shieldUsed = false;
     this.particles = [];
     this.hearts = [];
     this.collectibles = [];
+    this.obstacles = [];
     this.lastFreqIndex = -1;
     this.cheerTimer = 0;
+    this.quiz = null;
+    this.gameOverReason = '';
 
     if (id !== 'timpanometria') {
       const rng = makeRng(this.phaseSeed + 99);
@@ -303,11 +367,20 @@ export class GameEngine {
       }
     }
 
+    if (id === 'audiometria') {
+      const orng = makeRng(this.phaseSeed + 555);
+      for (let x = 900; x < this.terrain.length - 520; x += 640 + orng() * 520) {
+        if (this.terrain.gaps.some((g) => x > g.start - 70 && x < g.end + 70)) continue;
+        this.obstacles.push({ x, y: this.terrain.yAt(x) + 26, hit: false });
+      }
+    }
+
     this.screen = 'phaseIntro';
     this.setMessage(config.title, 2.2);
     this.synth.uiClick();
     if (id === 'audiometria') this.synth.playSweep();
     this.clinic.setProgress(0, id);
+    this.clinic.resetCamera();
     this.pushState(true);
   }
 
@@ -333,21 +406,130 @@ export class GameEngine {
     this.perfectCount = 0;
     this.maxSpeedSeen = 0;
     this.cheerTimer = 3.2;
-    this.screen = 'phaseResults';
+    this.quiz = this.buildQuiz(id);
+    this.screen = 'quiz';
+    this.clinic.focusLari();
     this.clinic.onCorrect();
     this.spawnHearts(3);
     this.synth.phaseComplete();
     this.pushState(true);
   }
 
-  private doGameOver(): void {
-    this.irritation = IRRITATION_MAX;
+  private doGameOver(reason: string): void {
+    if (this.screen === 'gameOver') return;
+    this.gameOverReason = reason;
+    this.toastyKey += 1;
     this.screen = 'gameOver';
     this.camShake = 1;
     this.clinic.onMiss();
     this.synth.gameOver();
-    this.setMessage('O paciente perdeu a paciência!', 2);
+    this.synth.toasty();
     this.pushState(true);
+  }
+
+  private addCredibility(delta: number): void {
+    this.credibility = clamp(this.credibility + delta, 0, CRED_MAX);
+    if (this.credibility <= 0) {
+      this.doGameOver(
+        'A Credibilidade do Laudo chegou a 0% — o exame foi invalidado pela avaliadora.',
+      );
+    }
+  }
+
+  private penalize(amount: number, alert: string): void {
+    this.setMessage(`\u26a0 ${alert}`, 2.4);
+    this.addCredibility(-amount);
+  }
+
+  // ---- Quiz (laudo clínico) ----
+
+  private buildQuiz(id: PhaseId): QuizData {
+    if (id === 'audiometria') return this.buildAudiometryQuiz();
+    if (id === 'timpanometria') return this.buildTympQuiz();
+    return this.buildReflexQuiz();
+  }
+
+  private buildAudiometryQuiz(): QuizData {
+    const dbs = this.terrain.markers.map((m) => 95 - m.y / 1.7);
+    const mean = (arr: number[]): number =>
+      arr.reduce((a, b) => a + b, 0) / Math.max(1, arr.length);
+    const avgLow = mean(dbs.slice(0, 3));
+    const avgHigh = mean(dbs.slice(-2));
+    const avgAll = mean(dbs);
+
+    let correctText: string;
+    let explain: string;
+    if (avgLow - avgHigh >= 25) {
+      correctText = DIAGNOSIS_POOL[0];
+      explain =
+        'Os limiares pioram progressivamente nas frequências altas (4000/8000 Hz) — padrão em rampa típico de perda neurossensorial.';
+    } else if (avgAll <= 20) {
+      correctText = DIAGNOSIS_POOL[1];
+      explain =
+        'Todos os limiares permaneceram \u2264 20 dB, dentro dos valores de normalidade.';
+    } else {
+      correctText = DIAGNOSIS_POOL[2];
+      explain =
+        'Limiares moderadamente elevados, sem queda acentuada nos agudos — perda leve e difusa.';
+    }
+    const wrongs = shuffle(DIAGNOSIS_POOL.filter((t) => t !== correctText)).slice(0, 2);
+    const options = shuffle([correctText, ...wrongs]);
+    return {
+      question: 'Qual é o diagnóstico deste audiograma?',
+      options,
+      correct: options.indexOf(correctText),
+      explain,
+    };
+  }
+
+  private buildTympQuiz(): QuizData {
+    const results = this.tymp?.typeResults ?? [];
+    const worst =
+      results.length > 0
+        ? results.reduce((acc, r) => (r.accuracy < acc.accuracy ? r : acc), results[0])
+        : null;
+    if (!worst) {
+      const fallback = 'Curva Timpanométrica Tipo A (Normal)';
+      const options = shuffle([
+        fallback,
+        'Curva Timpanométrica Tipo B (Plana/Sem pico)',
+        'Curva Timpanométrica Tipo C (Pressão Negativa)',
+      ]);
+      return {
+        question: 'Qual curva timpanométrica foi traçada?',
+        options,
+        correct: options.indexOf(fallback),
+        explain: 'A curva Tipo A tem pico centrado em 0 daPa com complacência normal.',
+      };
+    }
+    const spec = JERGER_SPECS.find((s) => s.id === worst.id);
+    const correctText = jergerOption(worst.id);
+    const wrongs = shuffle(
+      JERGER_SPECS.map((s) => jergerOption(s.id)).filter((t) => t !== correctText),
+    ).slice(0, 2);
+    const options = shuffle([correctText, ...wrongs]);
+    return {
+      question: `Qual curva timpanométrica teve o traçado mais difícil (precisão ${(worst.accuracy * 100).toFixed(0)}%)?`,
+      options,
+      correct: options.indexOf(correctText),
+      explain: spec ? `Na ${spec.name}: ${spec.hint}` : '',
+    };
+  }
+
+  private buildReflexQuiz(): QuizData {
+    const correctText = 'Integridade da via auditiva (VII e VIII pares cranianos)';
+    const wrongs = shuffle([
+      'Somente a mobilidade da membrana timpânica',
+      'A discriminação auditiva (compreensão de fala)',
+    ]);
+    const options = shuffle([correctText, ...wrongs]);
+    return {
+      question: 'O que o reflexo do estapédio avalia clinicamente?',
+      options,
+      correct: options.indexOf(correctText),
+      explain:
+        'O reflexo estapediano envolve o VIII par (aferente) e o VII par (eferente, nervo facial) — avalia a integridade da via reflexa auditiva.',
+    };
   }
 
   // ---- Input ----
@@ -377,6 +559,17 @@ export class GameEngine {
         this.hitMarker(marker);
         return;
       }
+      if (this.isFalsePositiveZone()) {
+        this.misses += 1;
+        this.combo = 1;
+        this.clinic.onMiss();
+        this.synth.miss();
+        this.penalize(
+          PENALTY_FALSE_POSITIVE,
+          `Falso-positivo! O paciente NÃO respondeu a este tom (${this.currentFrequency()} Hz). Registro invalidado (-20%).`,
+        );
+        return;
+      }
     }
     if (this.lari.grounded) {
       this.lari.vy = JUMP_V;
@@ -400,17 +593,21 @@ export class GameEngine {
     if (this.screen !== 'playing' || PHASE_ORDER[this.phaseIndex] !== 'reflexo') return;
     if (this.shieldTimer > 0) return;
     const glow = this.reflexGlow();
-    this.shieldTimer = 0.65;
-    this.synth.shield();
-    if (glow > 0.2) {
-      this.score += 60;
-      this.combo = Math.min(this.combo + 1, 8);
-      this.irritation = Math.max(0, this.irritation - 3);
-      this.setMessage('Reflexo perfeito!', 1.1);
-      this.clinic.onCorrect();
-    } else {
-      this.setMessage('Escudo ativo (fora de tempo)', 1.1);
+    if (glow <= 0.2) {
+      this.misses += 1;
+      this.combo = 1;
+      this.clinic.onMiss();
+      this.synth.miss();
+      this.penalize(
+        PENALTY_FALSE_REFLEX,
+        'Falso reflexo! Nenhum estímulo com resposta ativa agora — ativar o escudo sem indicação invalida o registro (-25%).',
+      );
+      return;
     }
+    this.shieldTimer = 0.65;
+    this.shieldUsed = false;
+    this.synth.shield();
+    this.setMessage('Escudo do reflexo ativado!', 1.1);
   }
 
   private pendingMarker(): Marker | null {
@@ -418,6 +615,12 @@ export class GameEngine {
       if (!m.hit && !m.missed && Math.abs(this.lari.x - m.x) <= m.window) return m;
     }
     return null;
+  }
+
+  private isFalsePositiveZone(): boolean {
+    return this.terrain.markers.some(
+      (m) => !m.hit && this.lari.x > m.x + m.window && this.lari.x < m.x + m.window * 2.2,
+    );
   }
 
   private hitMarker(marker: Marker): void {
@@ -428,7 +631,7 @@ export class GameEngine {
     if (perfect) this.perfectCount += 1;
     this.score += Math.round((perfect ? 200 : 100) * this.combo);
     this.combo = Math.min(this.combo + 1, 8);
-    this.irritation = Math.max(0, this.irritation - 4);
+    this.addCredibility(+1);
     this.lari.vy = BOOST_V;
     this.lari.grounded = false;
     this.lari.speed = Math.min(this.lari.speed + 110, MAX_SPEED);
@@ -448,8 +651,8 @@ export class GameEngine {
   }
 
   private get lariMood(): LariMood {
-    if (this.irritation < 30) return 'happy';
-    if (this.irritation < 65) return 'neutral';
+    if (this.credibility > 65) return 'happy';
+    if (this.credibility > 35) return 'neutral';
     return 'nervous';
   }
 
@@ -484,11 +687,6 @@ export class GameEngine {
 
   private updatePlaying(dt: number): void {
     const phase = PHASE_ORDER[this.phaseIndex];
-    this.irritation = clamp(this.irritation - IRRITATION_DECAY * dt, 0, IRRITATION_MAX);
-    if (this.irritation >= IRRITATION_MAX) {
-      this.doGameOver();
-      return;
-    }
 
     if (phase === 'timpanometria') {
       this.updateTympPhase(dt);
@@ -496,7 +694,7 @@ export class GameEngine {
       this.updateRunnerPhase(dt, phase);
     }
 
-    this.clinic.setMood(this.irritation / 100);
+    this.clinic.setMood((CRED_MAX - this.credibility) / CRED_MAX);
     this.clinic.setProgress(this.currentProgress(), phase);
   }
 
@@ -510,9 +708,14 @@ export class GameEngine {
     const terrain = this.terrain;
 
     const progress = clamp(lari.x / terrain.length, 0, 1);
+    const freqIdx = clamp(
+      Math.round((lari.x / terrain.length) * (FREQUENCIES_HZ.length - 1)),
+      0,
+      FREQUENCIES_HZ.length - 1,
+    );
     const targetSpeed =
       phase === 'audiometria'
-        ? BASE_SPEED + progress * 260
+        ? BASE_SPEED + progress * 260 + (freqIdx >= 4 ? 90 : 0)
         : BASE_SPEED + 120;
 
     if (lari.grounded) {
@@ -554,13 +757,17 @@ export class GameEngine {
 
     this.maxSpeedSeen = Math.max(this.maxSpeedSeen, lari.speed);
 
-    const inGap = terrain.gaps.some((g) => lari.x > g.start && lari.x < g.end);
-    if (inGap && lari.grounded) {
-      lari.grounded = false;
-      lari.vy = Math.min(lari.vy, -40);
-    }
-    if (inGap && lari.y < terrain.minY - 140) {
-      this.registerGapFall();
+    const gap = terrain.gaps.find((g) => lari.x > g.start && lari.x < g.end);
+    if (gap) {
+      if (lari.grounded) {
+        lari.grounded = false;
+        lari.vy = Math.min(lari.vy, -40);
+      }
+      const entryY = terrain.yAt(gap.start - 4);
+      if (lari.y < entryY - 90) {
+        this.registerGapFall();
+        if (this.screen !== 'playing') return;
+      }
     }
 
     for (const c of this.collectibles) {
@@ -576,41 +783,63 @@ export class GameEngine {
       }
     }
 
+    for (const o of this.obstacles) {
+      if (
+        !o.hit &&
+        Math.abs(lari.x - o.x) < 22 &&
+        lari.y < o.y + 42 &&
+        lari.y > o.y - 30
+      ) {
+        o.hit = true;
+        lari.speed = Math.max(150, lari.speed * 0.6);
+        this.camShake = Math.max(this.camShake, 0.8);
+        this.misses += 1;
+        this.combo = 1;
+        this.synth.waveHit();
+        this.clinic.onMiss();
+        this.spawnParticles(o.x, o.y, 12, '#ff5f6d');
+        this.penalize(
+          PENALTY_OBSTACLE,
+          'Ruído mascarante! O ruído contaminou o registro do exame (-25%).',
+        );
+        if (this.screen !== 'playing') return;
+      }
+    }
+
     if (phase === 'audiometria') {
-      const freqIdx = clamp(
-        Math.round((lari.x / terrain.length) * (FREQUENCIES_HZ.length - 1)),
-        0,
-        FREQUENCIES_HZ.length - 1,
-      );
       if (freqIdx !== this.lastFreqIndex) {
         this.lastFreqIndex = freqIdx;
         this.synth.playPureTone(FREQUENCIES_HZ[freqIdx], 0.3, 0.12);
       }
       for (const m of terrain.markers) {
+        if (!m.signaled && !m.hit && !m.missed && lari.x > m.x - m.window * 2) {
+          m.signaled = true;
+          this.clinic.onThresholdReached();
+          this.synth.playPureTone(this.currentFrequency(), 0.35, 0.16);
+        }
         if (!m.hit && !m.missed && lari.x > m.x + m.window) {
           m.missed = true;
           this.misses += 1;
           this.combo = 1;
-          this.irritation = clamp(this.irritation + IRRITATION_ON_MISS, 0, IRRITATION_MAX);
           this.clinic.onMiss();
           this.synth.miss();
-          this.setMessage('Limiar perdido… o paciente ficou irritado!', 1.3);
+          this.penalize(
+            PENALTY_OMISSION,
+            `Omissão! O paciente levantou a mão em ${this.terrain.labelAt(m.x)} e o limiar não foi registrado (-20%).`,
+          );
+          if (this.screen !== 'playing') return;
         }
       }
     }
 
     if (phase === 'reflexo') {
       this.updateWaves(dt);
+      if (this.screen !== 'playing') return;
     }
 
     if (this.shieldTimer > 0) this.shieldTimer -= dt;
 
     this.camY = lerp(this.camY, lari.y, Math.min(1, dt * 4));
-
-    if (this.irritation >= IRRITATION_MAX) {
-      this.doGameOver();
-      return;
-    }
 
     if (lari.x >= terrain.length - 240) {
       this.completePhase();
@@ -620,20 +849,35 @@ export class GameEngine {
   private updateTympPhase(dt: number): void {
     const tymp = this.tymp;
     if (!tymp) return;
+
+    if (tymp.currentState === 'sweeping') {
+      const target = targetCompliance(tymp.spec, tymp.currentPressure);
+      const inBand = Math.abs(tymp.currentCompliance - target) <= tymp.spec.tol;
+      if (!inBand) {
+        this.addCredibility(-PENALTY_TYMP_DRAIN * dt);
+        if (this.screen !== 'playing') return;
+        if (Math.random() < dt * 1.6) {
+          this.setMessage(
+            '\u26a0 Desvio da curva! Mantenha o traçado dentro da faixa tracejada (-15%/s)',
+            0.9,
+          );
+        }
+      }
+    }
+
     const event = tymp.update(dt);
 
     if (event === 'oscillation') {
       this.misses += 1;
       this.combo = 1;
-      this.irritation = clamp(this.irritation + IRRITATION_ON_OSCILLATION, 0, IRRITATION_MAX);
       this.camShake = Math.max(this.camShake, 0.35);
       this.clinic.onMiss();
       this.synth.miss();
-      this.setMessage('Traçado fora da faixa! O paciente torceu o nariz…', 1.1);
+      this.setMessage('Traçado oscilando fora da faixa! A credibilidade está caindo…', 1.1);
     } else if (event === 'peak') {
       this.score += 150;
       this.perfectCount += 1;
-      this.irritation = Math.max(0, this.irritation - 5);
+      this.addCredibility(+2);
       this.synth.hitThreshold(1000);
       this.clinic.onCorrect();
       const px = this.tympAxisX(tymp.currentPressure, this.gameArea());
@@ -647,6 +891,7 @@ export class GameEngine {
           this.hits += 1;
           this.score += 300;
           this.combo = Math.min(this.combo + 1, 8);
+          this.addCredibility(+5);
           this.synth.phaseComplete();
           this.clinic.onCorrect();
           this.spawnHearts(1);
@@ -654,14 +899,17 @@ export class GameEngine {
         } else {
           this.misses += 1;
           this.combo = 1;
-          this.irritation = clamp(this.irritation + 10, 0, IRRITATION_MAX);
           this.synth.miss();
           this.clinic.onMiss();
-          this.setMessage(`${r.id === 'C' ? 'Tipo C' : `Tipo ${r.id}`}: fora da faixa na maior parte…`, 1.6);
+          this.setMessage(
+            `${r.id === 'C' ? 'Tipo C' : `Tipo ${r.id}`}: fora da faixa na maior parte do traçado…`,
+            1.6,
+          );
         }
       }
     }
 
+    if (this.screen !== 'playing') return;
     if (tymp.finished) {
       this.completePhase();
     }
@@ -679,6 +927,7 @@ export class GameEngine {
         speed: this.lari.speed * 0.62,
         radius: 46,
         blocked: false,
+        present: Math.random() < 0.62,
         phase: Math.random() * Math.PI * 2,
       });
     }
@@ -689,31 +938,56 @@ export class GameEngine {
       wave.y = this.terrain.yAt(Math.max(0, wave.x)) + 46;
       if (!wave.blocked && wave.x <= this.lari.x + 26) {
         wave.blocked = true;
-        if (this.shieldTimer > 0) {
-          this.score += 80;
-          this.hits += 1;
-          this.irritation = Math.max(0, this.irritation - 3);
-          this.synth.waveBlocked();
-          this.clinic.onCorrect();
-          this.spawnParticles(wave.x, wave.y, 12, '#7fd8ff');
-          this.setMessage('Onda bloqueada pelo reflexo!', 1);
-        } else {
+        if (wave.present) {
+          if (this.shieldTimer > 0) {
+            this.shieldUsed = true;
+            this.score += 80;
+            this.hits += 1;
+            this.addCredibility(+2);
+            this.synth.waveBlocked();
+            this.clinic.onCorrect();
+            this.spawnParticles(wave.x, wave.y, 12, '#7fd8ff');
+            this.setMessage('Onda bloqueada pelo reflexo! Resposta presente confirmada.', 1.2);
+          } else {
+            this.misses += 1;
+            this.combo = 1;
+            this.camShake = 1;
+            this.lari.speed = Math.max(150, this.lari.speed * 0.7);
+            this.synth.waveHit();
+            this.clinic.onMiss();
+            this.spawnParticles(wave.x, wave.y, 12, '#ff7a7a');
+            this.penalize(
+              PENALTY_WAVE_MISS,
+              'Falha de defesa! O reflexo estava PRESENTE e a onda atingiu a Lari (-25%).',
+            );
+            if (this.screen !== 'playing') return;
+          }
+        } else if (this.shieldTimer > 0 && !this.shieldUsed) {
+          this.shieldUsed = true;
           this.misses += 1;
           this.combo = 1;
-          this.irritation = clamp(this.irritation + IRRITATION_ON_WAVE_HIT, 0, IRRITATION_MAX);
-          this.camShake = 1;
-          this.lari.speed = Math.max(150, this.lari.speed * 0.7);
-          this.synth.waveHit();
           this.clinic.onMiss();
-          this.spawnParticles(wave.x, wave.y, 12, '#ff7a7a');
-          this.setMessage('A onda atingiu a Lari! O paciente se irritou…', 1.2);
+          this.synth.miss();
+          this.penalize(
+            PENALTY_FALSE_REFLEX,
+            'Falso reflexo! Não há resposta do estapédio neste estímulo — escudo ativado sem indicação (-25%).',
+          );
+          if (this.screen !== 'playing') return;
+        } else {
+          this.score += 30;
+          this.hits += 1;
+          this.addCredibility(+1);
+          this.synth.playPureTone(900, 0.12, 0.1);
+          this.clinic.onCorrect();
+          this.spawnParticles(wave.x, wave.y, 8, '#9aa7c0');
+          this.setMessage('\u2705 Correto: reflexo ausente — nenhuma resposta esperada (+30)', 1.2);
         }
       }
     }
     this.waves = this.waves.filter((w) => w.x > this.lari.x - 320);
 
     const nearest = this.waves.reduce<number>((acc, w) => {
-      if (w.blocked) return acc;
+      if (w.blocked || !w.present) return acc;
       const dist = w.x - this.lari.x;
       const glow = clamp(1 - dist / 380, 0, 1);
       return Math.max(acc, glow);
@@ -723,7 +997,7 @@ export class GameEngine {
 
   private reflexGlow(): number {
     return this.waves.reduce<number>((acc, w) => {
-      if (w.blocked) return acc;
+      if (w.blocked || !w.present) return acc;
       return Math.max(acc, clamp(1 - (w.x - this.lari.x) / 380, 0, 1));
     }, 0);
   }
@@ -733,11 +1007,13 @@ export class GameEngine {
     const exitX = gap ? gap.end + 80 : this.lari.x + 200;
     this.misses += 1;
     this.combo = 1;
-    this.irritation = clamp(this.irritation + IRRITATION_ON_GAP_FALL, 0, IRRITATION_MAX);
     this.camShake = 0.8;
     this.synth.miss();
     this.clinic.onMiss();
-    this.setMessage('A Lari caiu no platô do Tipo B! O paciente se irritou…', 1.6);
+    this.penalize(
+      PENALTY_FALL,
+      'Queda fora do traçado! A Lari caiu na queda brusca do audiograma (-25%).',
+    );
     this.lari.x = exitX;
     this.lari.y = this.terrain.yAt(exitX) + 120;
     this.lari.vy = 0;
@@ -755,6 +1031,7 @@ export class GameEngine {
         life: 0.6 + Math.random() * 0.4,
         maxLife: 1,
         color,
+        screenSpace: false,
       });
     }
     if (this.particles.length > 220) this.particles.splice(0, this.particles.length - 220);
@@ -771,6 +1048,7 @@ export class GameEngine {
         life: 0.5 + Math.random() * 0.3,
         maxLife: 1,
         color,
+        screenSpace: true,
       });
     }
   }
@@ -869,9 +1147,12 @@ export class GameEngine {
       isPortrait: this.isPortrait,
       hasTouch: this.hasTouch,
       muted: this.muted,
-      irritation: this.irritation,
+      credibility: this.credibility,
       lariMood: this.lariMood,
       phaseHint: this.tymp ? this.tymp.hint() : '',
+      quiz: this.quiz,
+      gameOverReason: this.gameOverReason,
+      toastyKey: this.toastyKey,
     });
   }
 
@@ -896,6 +1177,7 @@ export class GameEngine {
     } else {
       this.drawTerrain(area);
       this.drawCollectibles(area);
+      this.drawObstacles(area);
       this.drawMarkers(area);
       if (PHASE_ORDER[this.phaseIndex] === 'reflexo' && this.screen !== 'menu') {
         this.drawWaves(area);
@@ -1063,6 +1345,47 @@ export class GameEngine {
     ctx.restore();
   }
 
+  /** Raios de ruído mascarante (Fase 1) — obstáculos vermelhos em zigue-zague. */
+  private drawObstacles(area: Area): void {
+    if (this.screen === 'menu' || this.obstacles.length === 0) return;
+    const ctx = this.ctx;
+    const s = this.worldScale(area) * 4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.x, area.y, area.w, area.h);
+    ctx.clip();
+    for (const o of this.obstacles) {
+      const sx = this.screenX(o.x, area);
+      const sy = this.screenY(o.y, area);
+      if (sx < area.x - 40 || sx > area.x + area.w + 40) continue;
+      const color = o.hit ? 'rgba(130, 138, 155, 0.55)' : '#ff4d5e';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = o.hit ? 0 : 10;
+      ctx.beginPath();
+      ctx.moveTo(sx - 2.4 * s, sy - 5.6 * s);
+      ctx.lineTo(sx + 0.8 * s, sy - 1.2 * s);
+      ctx.lineTo(sx - 0.8 * s, sy - 0.4 * s);
+      ctx.lineTo(sx + 2.4 * s, sy + 4.8 * s);
+      ctx.lineTo(sx + 0.4 * s, sy + 1.2 * s);
+      ctx.lineTo(sx + 2 * s, sy + 0.8 * s);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      if (!o.hit) {
+        const pulse = 1 + Math.sin(this.animTime * 8 + o.x) * 0.18;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 8 * s * pulse, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+  }
+
   private drawMarkers(area: Area): void {
     if (this.screen === 'menu') return;
     const ctx = this.ctx;
@@ -1081,6 +1404,7 @@ export class GameEngine {
       let color = phase === 'audiometria' ? (m.label === 'O' ? '#ff5f6d' : '#5a8bff') : '#3ddc97';
       if (m.hit) color = '#7dff9b';
       if (m.missed) color = 'rgba(150, 150, 160, 0.6)';
+      if (m.signaled && !m.hit && !m.missed) color = '#ffd54a';
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = near ? 3 : 2;
@@ -1088,11 +1412,11 @@ export class GameEngine {
       ctx.arc(sx, sy - 14, 9, 0, Math.PI * 2);
       ctx.stroke();
       if (m.hit) {
-        ctx.fillText('✓', sx, sy - 10);
+        ctx.fillText('\u2713', sx, sy - 10);
       } else {
-        ctx.fillText(m.kind === 'threshold' ? m.label : '▲', sx, sy - 10);
+        ctx.fillText(m.kind === 'threshold' ? m.label : '\u25b2', sx, sy - 10);
       }
-      if (near && !m.hit && !m.missed) {
+      if (m.signaled && !m.hit && !m.missed) {
         const pulse = 12 + Math.sin(this.animTime * 12) * 4;
         ctx.globalAlpha = 0.5;
         ctx.beginPath();
@@ -1205,7 +1529,7 @@ export class GameEngine {
         ctx.font = 'bold 13px monospace';
         ctx.fillStyle = last.passed ? '#7dff9b' : '#ff7a7a';
         ctx.fillText(
-          `${last.passed ? '✓ APROVADO' : '✗ REPROVADO'} · precisão ${(last.accuracy * 100).toFixed(0)}% · oscilações: ${last.oscillations}`,
+          `${last.passed ? '\u2713 APROVADO' : '\u2717 REPROVADO'} \u00b7 precis\u00e3o ${(last.accuracy * 100).toFixed(0)}% \u00b7 oscila\u00e7\u00f5es: ${last.oscillations}`,
           area.x + 14,
           area.y + 46,
         );
@@ -1214,7 +1538,7 @@ export class GameEngine {
       ctx.font = '12px monospace';
       ctx.fillStyle = 'rgba(200, 215, 255, 0.8)';
       ctx.fillText(
-        `Varredura ${tymp.typeResults.length + 1}/${tymp.types.length} · precisão do segmento: ${Math.round(this.tympBandRatio() * 100)}%`,
+        `Varredura ${tymp.typeResults.length + 1}/${tymp.types.length} \u00b7 precis\u00e3o do segmento: ${Math.round(this.tympBandRatio() * 100)}%`,
         area.x + 14,
         area.y + 46,
       );
@@ -1284,22 +1608,42 @@ export class GameEngine {
     ctx.beginPath();
     ctx.rect(area.x, area.y, area.w, area.h);
     ctx.clip();
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
     for (const wave of this.waves) {
       const sx = this.screenX(wave.x, area);
       const sy = this.screenY(wave.y, area);
       const r = wave.radius * (1 + 0.14 * Math.sin(wave.phase)) * this.worldScale(area) * 1.4;
-      const glow = clamp(1 - (wave.x - this.lari.x) / 380, 0, 1);
-      ctx.strokeStyle = wave.blocked ? 'rgba(120,130,150,0.4)' : `rgba(255, ${120 + glow * 100}, 160, 0.9)`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = wave.blocked ? 'rgba(120,130,150,0.25)' : 'rgba(255, 170, 210, 0.5)';
-      ctx.beginPath();
-      ctx.arc(sx, sy, r * 0.62, 0, Math.PI * 2);
-      ctx.stroke();
+      if (wave.present) {
+        const glow = clamp(1 - (wave.x - this.lari.x) / 380, 0, 1);
+        ctx.strokeStyle = wave.blocked ? 'rgba(120,130,150,0.4)' : `rgba(255, ${120 + glow * 100}, 160, 0.9)`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = wave.blocked ? 'rgba(120,130,150,0.25)' : 'rgba(255, 170, 210, 0.5)';
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * 0.62, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = wave.blocked ? 'rgba(110,118,135,0.35)' : 'rgba(160, 170, 195, 0.75)';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * 0.62, 0, Math.PI * 2);
+        ctx.stroke();
+        if (!wave.blocked) {
+          ctx.fillStyle = 'rgba(200, 210, 235, 0.85)';
+          ctx.fillText('ausente', sx, sy - r - 6);
+        }
+      }
     }
     ctx.restore();
+    ctx.textAlign = 'left';
   }
 
   private drawLari(area: Area): void {
@@ -1411,10 +1755,9 @@ export class GameEngine {
     ctx.beginPath();
     ctx.rect(area.x, area.y, area.w, area.h);
     ctx.clip();
-    const isTymp = PHASE_ORDER[this.phaseIndex] === 'timpanometria';
     for (const p of this.particles) {
-      const sx = isTymp ? p.x : this.screenX(p.x, area);
-      const sy = isTymp ? p.y : this.screenY(p.y, area);
+      const sx = p.screenSpace ? p.x : this.screenX(p.x, area);
+      const sy = p.screenSpace ? p.y : this.screenY(p.y, area);
       ctx.globalAlpha = clamp(p.life, 0, 1);
       ctx.fillStyle = p.color;
       const s = 3 * scale * 1.6;

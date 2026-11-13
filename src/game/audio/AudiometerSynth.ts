@@ -173,4 +173,12 @@ export class AudiometerSynth {
   uiClick(): void {
     this.blip('square', 700, 900, 0.06, 0.1);
   }
+
+  /** Easter egg "Toasty!": glide agudo retrô em duas camadas. */
+  toasty(): void {
+    this.blip('square', 520, 1560, 0.13, 0.2);
+    this.blip('triangle', 1560, 880, 0.2, 0.16, 0.1);
+    this.blip('square', 1040, 2080, 0.14, 0.14, 0.24);
+    this.blip('square', 2080, 2080, 0.16, 0.12, 0.38);
+  }
 }
