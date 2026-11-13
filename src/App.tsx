@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GameEngine } from './game/engine';
 import { HudState } from './game/types';
 import { HUD } from './components/HUD';
+import SplashScreen from './components/SplashScreen';
 
 const INITIAL_STATE: HudState = {
   screen: 'menu',
@@ -34,6 +35,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const [state, setState] = useState<HudState>(INITIAL_STATE);
+  const [splashDone, setSplashDone] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -50,6 +52,7 @@ export default function App() {
     <div className="app-root">
       <div ref={containerRef} className="game-container" />
       <HUD state={state} engineRef={engineRef} />
+      {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
     </div>
   );
 }

@@ -91,6 +91,9 @@ tronco, jaleco, braços e cabeça apareçam claramente.
 - No **Laudo Final**, a Lari 2D anima conforme o conceito: comemora nos conceitos
   A/B, corre no C e fica parada e suando no D — ao lado do painel, no mesmo
   plano do menu.
+- **Splash de abertura**: as ondas dos gráficos clínicos viram um mar que
+  submerge a tela da direita para a esquerda; quando a maré recua, o menu
+  aparece pronto. Um toque pula a abertura.
 
 ## Stack
 
