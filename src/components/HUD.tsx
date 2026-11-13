@@ -13,6 +13,12 @@ const PHASE_RESULT_LABEL: Record<PhaseResult['phase'], string> = {
   reflexo: 'Reflexo Estapediano',
 };
 
+function patientFace(irritation: number): string {
+  if (irritation < 30) return '😊';
+  if (irritation < 65) return '😐';
+  return '😠';
+}
+
 function TopBar({ state, engineRef }: Props) {
   const engine = engineRef.current;
   return (
@@ -28,11 +34,30 @@ function TopBar({ state, engineRef }: Props) {
         <span className="freq-label">{state.frequencyLabel}</span>
       </div>
       <div className="right-group">
-        <span className="stat speed">{state.speed} u/s</span>
+        <span className="stat speed">
+          {state.phase === 'timpanometria' ? `C ${state.speed}` : `${state.speed} u/s`}
+        </span>
         <button className="icon-btn" onClick={() => engine?.toggleMute()} aria-label="Som">
           {state.muted ? '🔇' : '🔊'}
         </button>
       </div>
+    </div>
+  );
+}
+
+function PatienceMeter({ state }: { state: HudState }) {
+  const moodLabel =
+    state.lariMood === 'happy' ? 'Lari feliz!' : state.lariMood === 'neutral' ? 'Lari atenta' : 'Lari nervosa!';
+  return (
+    <div className="patience-meter">
+      <span className="patience-face">{patientFace(state.irritation)}</span>
+      <div className="patience-track">
+        <div
+          className={`patience-fill ${state.irritation > 65 ? 'danger' : state.irritation > 30 ? 'warn' : ''}`}
+          style={{ width: `${Math.round(state.irritation)}%` }}
+        />
+      </div>
+      <span className="patience-mood">{moodLabel}</span>
     </div>
   );
 }
@@ -63,16 +88,17 @@ function MenuScreen({ engineRef, hasTouch }: { engineRef: Props['engineRef']; ha
       <h1 className="game-title">
         Lari <span className="amp">&amp;</span> The Graphs
       </h1>
-      <p className="tagline">Corra sobre audiogramas, timpanogramas e reflexos!</p>
+      <p className="tagline">Corra sobre audiogramas, calibre timpanogramas e bloqueie reflexos!</p>
       <ul className="menu-list">
         <li>🎧 Fase 1 — Audiometria Tonal: salte os limiares auditivos</li>
-        <li>📈 Fase 2 — Timpanometria: mergulhe nas curvas Tipo A/B/C</li>
+        <li>📈 Fase 2 — Timpanometria: calibre a pressão nos 5 tipos de Jerger</li>
         <li>🛡️ Fase 3 — Reflexo Estapediano: bloqueie as ondas sonoras</li>
+        <li>😠 Erre demais e o paciente encerra o exame!</li>
       </ul>
       <p className="controls-hint">
         {hasTouch
-          ? 'Toque = pular · Segure = mergulhar · Deslize ↑ = reflexo'
-          : 'Clique/Espaço = pular · Segure = mergulhar · ↑ = reflexo · ↓ = mergulhar'}
+          ? 'Toque = pular · Segure = pressão/mergulho · Deslize ↑ = reflexo'
+          : 'Clique/Espaço = pular · Segure = pressão · ↑ = reflexo · ↓ = mergulhar'}
       </p>
       <button className="primary-btn" onClick={() => engineRef.current?.beginRun()}>
         Começar o plantão 🩺
@@ -90,7 +116,7 @@ function PhaseIntroScreen({
 }) {
   const phase = PHASES[state.phase];
   return (
-    <div className="overlay">
+    <div className="overlay tappable" onClick={() => engineRef.current?.confirmPhaseIntro()}>
       <h2>{phase.title}</h2>
       <p className="subtitle">{phase.subtitle}</p>
       <p className="instructions">{phase.instructions}</p>
@@ -115,7 +141,7 @@ function PhaseResultsScreen({
   const isFinal = state.results.length === 3;
   return (
     <div className="overlay">
-      <h2>{PHASE_RESULT_LABEL[last.phase]} concluída!</h2>
+      <h2>💖 {PHASE_RESULT_LABEL[last.phase]} concluída!</h2>
       <div className="results-grid">
         <div className="result-item">
           <span className="value">{last.hits}</span>
@@ -136,16 +162,55 @@ function PhaseResultsScreen({
       </div>
       <p className="laudo-note">
         {accuracy >= 80
-          ? '📋 Laudo impecável! Os pacientes agradecem.'
+          ? '📋 Laudo impecável! O paciente saiu sorrindo. 💖'
           : accuracy >= 50
             ? '📋 Laudo bom — revise os limiares duvidosos.'
-            : '📋 Laudo com ressalvas… treine mais o timing!'}
+            : '📋 Laudo com ressalvas… o paciente quase perdeu a paciência!'}
       </p>
       <button
         className="primary-btn"
         onClick={() => engineRef.current?.advanceFromResults()}
       >
         {isFinal ? 'Ver laudo final 📋' : 'Próxima fase ▶'}
+      </button>
+    </div>
+  );
+}
+
+function GameOverScreen({
+  state,
+  engineRef,
+}: {
+  state: HudState;
+  engineRef: Props['engineRef'];
+}) {
+  return (
+    <div className="overlay game-over">
+      <h2>😠 Exame interrompido!</h2>
+      <p className="instructions">
+        O paciente perdeu a paciência com tantos erros e encerrou o exame.
+        <br />
+        Respire fundo, revise o procedimento e tente de novo — a Lari confia em você!
+      </p>
+      <div className="results-grid">
+        <div className="result-item">
+          <span className="value">{state.hits}</span>
+          <span className="label">acertos</span>
+        </div>
+        <div className="result-item">
+          <span className="value">{state.misses}</span>
+          <span className="label">erros</span>
+        </div>
+        <div className="result-item">
+          <span className="value">{state.score}</span>
+          <span className="label">pontos</span>
+        </div>
+      </div>
+      <button className="primary-btn" onClick={() => engineRef.current?.retryPhase()}>
+        Repetir fase 🔁
+      </button>
+      <button className="secondary-btn" onClick={() => engineRef.current?.backToMenu()}>
+        Menu
       </button>
     </div>
   );
@@ -202,6 +267,7 @@ export function HUD({ state, engineRef }: Props) {
       {state.screen === 'playing' && (
         <>
           <TopBar state={state} engineRef={engineRef} />
+          <PatienceMeter state={state} />
           <ProgressBar progress={state.progress} />
           <MessageToast state={state} />
           {state.phase === 'reflexo' && (
@@ -211,11 +277,16 @@ export function HUD({ state, engineRef }: Props) {
                 : 'Espaço/↑ quando brilhar!'}
             </div>
           )}
+          {state.phase === 'timpanometria' && state.phaseHint && (
+            <div className="tymp-hint">💡 {state.phaseHint}</div>
+          )}
           {state.isPortrait && (
             <div className="touch-hint">
               {state.phase === 'timpanometria'
-                ? 'Segure para mergulhar 🤿'
-                : 'Toque para pular · deslize ↑ para o reflexo'}
+                ? 'Segure = pressão ↑ · Solte = pressão ↓'
+                : state.phase === 'reflexo'
+                  ? 'Deslize ↑ para o reflexo'
+                  : 'Toque para pular · deslize ↑ para o reflexo'}
             </div>
           )}
         </>
@@ -226,6 +297,7 @@ export function HUD({ state, engineRef }: Props) {
       {state.screen === 'phaseResults' && (
         <PhaseResultsScreen state={state} engineRef={engineRef} />
       )}
+      {state.screen === 'gameOver' && <GameOverScreen state={state} engineRef={engineRef} />}
       {state.screen === 'finalReport' && <FinalReportScreen state={state} engineRef={engineRef} />}
 
       {state.screen === 'playing' && (

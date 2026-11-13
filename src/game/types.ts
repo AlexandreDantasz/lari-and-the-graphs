@@ -5,7 +5,10 @@ export type GameScreen =
   | 'phaseIntro'
   | 'playing'
   | 'phaseResults'
-  | 'finalReport';
+  | 'finalReport'
+  | 'gameOver';
+
+export type LariMood = 'happy' | 'neutral' | 'nervous';
 
 export interface PhaseResult {
   phase: PhaseId;
@@ -34,6 +37,9 @@ export interface HudState {
   isPortrait: boolean;
   hasTouch: boolean;
   muted: boolean;
+  irritation: number;
+  lariMood: LariMood;
+  phaseHint: string;
 }
 
 export interface PhaseConfig {
@@ -69,24 +75,24 @@ export const PHASES: Record<PhaseId, PhaseConfig> = {
     title: 'Fase 1 · Audiometria Tonal',
     subtitle: 'Orelha Direita (O) × Orelha Esquerda (X)',
     instructions:
-      'Toque no timing exato dos limiares auditivos para dar impulso à Lari e saltar as quedas de perda auditiva. A velocidade aumenta nos agudos!',
-    length: 6400,
+      'Toque no timing exato dos limiares auditivos para dar impulso à Lari e saltar as quedas de perda auditiva. Colete as ondinhas sonoras e cuidado: errar demais irrita o paciente! A velocidade aumenta nos agudos.',
+    length: 9600,
   },
   timpanometria: {
     id: 'timpanometria',
     title: 'Fase 2 · Timpanometria',
-    subtitle: 'Curvas Tipo A, As, Ad, B e C',
+    subtitle: 'Calibração de Pressão & Complacência · 5 tipos de Jerger',
     instructions:
-      'Segure o toque para mergulhar nas descidas e ganhar velocidade (estilo Tiny Wings). Salte os picos de complacência e os platôs do Tipo B!',
-    length: 7200,
+      'Guie a sonda na varredura de -400 a +200 daPa: segure para aumentar a pressão positiva (curva sobe) e solte para reduzir (curva desce). Mantenha o traçado dentro da faixa tracejada e estabilize no pico no momento certo — cada tipo de Jerger se comporta de um jeito!',
+    length: 5,
   },
   reflexo: {
     id: 'reflexo',
     title: 'Fase 3 · Reflexo Estapediano',
     subtitle: 'Imitanciometria · Defesa rítmica',
     instructions:
-      'Ondas sonoras avançam contra a Lari! Quando o fone do paciente brilhar, deslize para cima (ou Espaço/Seta ↑) para ativar o escudo do reflexo.',
-    length: 5200,
+      'Ondas sonoras avançam contra a Lari em um trajeto longo e pulsante! Quando o fone do paciente brilhar, deslize para cima (ou Espaço/Seta ↑) para ativar o escudo do reflexo. Colete as ondinhas e mantenha o paciente calmo.',
+    length: 8400,
   },
 };
 

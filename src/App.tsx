@@ -21,6 +21,9 @@ const INITIAL_STATE: HudState = {
   isPortrait: false,
   hasTouch: false,
   muted: false,
+  irritation: 0,
+  lariMood: 'happy' as const,
+  phaseHint: '',
 };
 
 export default function App() {

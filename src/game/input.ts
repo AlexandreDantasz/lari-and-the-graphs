@@ -33,11 +33,9 @@ export class InputController {
       if (!this.pointerActive || this.swipeFired) return;
       const dy = e.clientY - this.startY;
       const dt = performance.now() - this.startT;
-      if (dy < -42 && dt < 600) {
+      if (dy < -48 && dt < 600) {
         this.swipeFired = true;
         this.cb.onShield();
-        this.cb.onPressEnd('pointer');
-        this.pointerActive = false;
       }
     };
     const onUp = (): void => {
@@ -72,10 +70,15 @@ export class InputController {
       }
     };
 
+    const onContextMenu = (e: Event): void => {
+      e.preventDefault();
+    };
+
     this.el.addEventListener('pointerdown', onDown);
     this.el.addEventListener('pointermove', onMove);
     this.el.addEventListener('pointerup', onUp);
     this.el.addEventListener('pointercancel', onUp);
+    this.el.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
@@ -84,6 +87,7 @@ export class InputController {
       this.el.removeEventListener('pointermove', onMove);
       this.el.removeEventListener('pointerup', onUp);
       this.el.removeEventListener('pointercancel', onUp);
+      this.el.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     });

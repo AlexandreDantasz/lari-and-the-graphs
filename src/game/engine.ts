@@ -1,17 +1,20 @@
 import { AudiometerSynth } from './audio/AudiometerSynth';
 import { InputController } from './input';
-import { createAudiometryTerrain, createReflexTerrain, createTympanometryTerrain, Terrain } from './terrain';
+import { createAudiometryTerrain, createReflexTerrain, Terrain } from './terrain';
 import { buildLariSpriteSheet, LARI_FRAMES, LariSpriteSheet, SPRITE_H, SPRITE_W } from './sprites/lari';
 import { ClinicScene } from './three/clinic';
-import { FREQUENCIES_HZ, HudState, Marker, PHASES, PhaseId, PhaseResult, Wave } from './types';
-import { clamp, lerp } from './utils';
-
-interface Area {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+import { TympScan } from './tympanometry';
+import {
+  FREQUENCIES_HZ,
+  HudState,
+  LariMood,
+  Marker,
+  PHASES,
+  PhaseId,
+  PhaseResult,
+  Wave,
+} from './types';
+import { clamp, lerp, makeRng } from './utils';
 
 interface Particle {
   x: number;
@@ -21,6 +24,22 @@ interface Particle {
   life: number;
   maxLife: number;
   color: string;
+}
+
+interface Heart {
+  x: number;
+  y: number;
+  vy: number;
+  wobble: number;
+  life: number;
+  maxLife: number;
+  size: number;
+}
+
+interface Collectible {
+  x: number;
+  y: number;
+  taken: boolean;
 }
 
 interface LariState {
@@ -33,6 +52,13 @@ interface LariState {
   holding: boolean;
 }
 
+interface Area {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 const GRAVITY = 1500;
 const DIVE_GRAVITY = 2600;
 const JUMP_V = 580;
@@ -40,7 +66,16 @@ const BOOST_V = 660;
 const BASE_SPEED = 250;
 const MAX_SPEED = 620;
 
+const IRRITATION_ON_MISS = 12;
+const IRRITATION_ON_WAVE_HIT = 14;
+const IRRITATION_ON_GAP_FALL = 10;
+const IRRITATION_ON_OSCILLATION = 8;
+const IRRITATION_DECAY = 0.8;
+const IRRITATION_MAX = 100;
+
 const PHASE_ORDER: PhaseId[] = ['audiometria', 'timpanometria', 'reflexo'];
+
+const HEART_MATRIX = ['.X.X.', 'XXXXX', 'XXXXX', '.XXX.', '..X..'];
 
 export class GameEngine {
   private container: HTMLElement;
@@ -66,6 +101,7 @@ export class GameEngine {
   private screen: HudState['screen'] = 'menu';
   private phaseIndex = 0;
   private terrain: Terrain = createReflexTerrain(1, 1000);
+  private tymp: TympScan | null = null;
   private lari: LariState = {
     x: 0,
     y: 0,
@@ -84,9 +120,12 @@ export class GameEngine {
   private waveTimer = 0;
   private waveInterval = 1.7;
   private particles: Particle[] = [];
+  private hearts: Heart[] = [];
+  private collectibles: Collectible[] = [];
   private lastFreqIndex = -1;
   private phaseSeed = 7;
 
+  private irritation = 0;
   private score = 0;
   private hits = 0;
   private misses = 0;
@@ -171,6 +210,7 @@ export class GameEngine {
     this.misses = 0;
     this.combo = 1;
     this.perfectCount = 0;
+    this.irritation = 0;
     this.results = [];
     this.phaseIndex = 0;
     this.startPhase('audiometria');
@@ -188,8 +228,19 @@ export class GameEngine {
     this.startPhase(next);
   }
 
+  retryPhase(): void {
+    this.synth.unlock();
+    this.irritation = 35;
+    this.hits = 0;
+    this.misses = 0;
+    this.combo = 1;
+    this.perfectCount = 0;
+    this.startPhase(PHASE_ORDER[this.phaseIndex]);
+  }
+
   backToMenu(): void {
     this.screen = 'menu';
+    this.irritation = 0;
     this.pushState(true);
   }
 
@@ -199,17 +250,27 @@ export class GameEngine {
     this.pushState(true);
   }
 
+  confirmPhaseIntro(): void {
+    this.synth.unlock();
+    if (this.screen === 'phaseIntro') this.startPlaying();
+  }
+
   // ---- Fluxo de fases ----
 
   private startPhase(id: PhaseId): void {
     const config = PHASES[id];
     this.phaseSeed = (this.phaseSeed * 1103515245 + 12345) % 2147483647;
-    this.terrain =
-      id === 'audiometria'
-        ? createAudiometryTerrain(this.phaseSeed, config.length)
-        : id === 'timpanometria'
-          ? createTympanometryTerrain(this.phaseSeed, config.length)
+
+    if (id === 'timpanometria') {
+      this.tymp = new TympScan(this.phaseSeed);
+      this.terrain = createReflexTerrain(this.phaseSeed, 1200);
+    } else {
+      this.tymp = null;
+      this.terrain =
+        id === 'audiometria'
+          ? createAudiometryTerrain(this.phaseSeed, config.length)
           : createReflexTerrain(this.phaseSeed, config.length);
+    }
 
     this.lari = {
       x: 60,
@@ -226,23 +287,33 @@ export class GameEngine {
     this.waveInterval = 1.7;
     this.shieldTimer = 0;
     this.particles = [];
+    this.hearts = [];
+    this.collectibles = [];
     this.lastFreqIndex = -1;
     this.cheerTimer = 0;
+
+    if (id !== 'timpanometria') {
+      const rng = makeRng(this.phaseSeed + 99);
+      for (let x = 520; x < this.terrain.length - 420; x += 280 + rng() * 140) {
+        this.collectibles.push({
+          x,
+          y: this.terrain.yAt(x) + 44 + Math.sin(x * 0.01) * 20,
+          taken: false,
+        });
+      }
+    }
+
     this.screen = 'phaseIntro';
     this.setMessage(config.title, 2.2);
     this.synth.uiClick();
     if (id === 'audiometria') this.synth.playSweep();
+    this.clinic.setProgress(0, id);
     this.pushState(true);
   }
 
   private startPlaying(): void {
     this.screen = 'playing';
     this.pushState(true);
-  }
-
-  confirmPhaseIntro(): void {
-    this.synth.unlock();
-    if (this.screen === 'phaseIntro') this.startPlaying();
   }
 
   private completePhase(): void {
@@ -261,10 +332,21 @@ export class GameEngine {
     this.combo = 1;
     this.perfectCount = 0;
     this.maxSpeedSeen = 0;
-    this.cheerTimer = 2.6;
+    this.cheerTimer = 3.2;
     this.screen = 'phaseResults';
     this.clinic.onCorrect();
+    this.spawnHearts(3);
     this.synth.phaseComplete();
+    this.pushState(true);
+  }
+
+  private doGameOver(): void {
+    this.irritation = IRRITATION_MAX;
+    this.screen = 'gameOver';
+    this.camShake = 1;
+    this.clinic.onMiss();
+    this.synth.gameOver();
+    this.setMessage('O paciente perdeu a paciência!', 2);
     this.pushState(true);
   }
 
@@ -285,17 +367,16 @@ export class GameEngine {
     }
 
     this.lari.holding = true;
+    if (phase === 'timpanometria') {
+      this.tymp?.setHolding(true);
+      return;
+    }
     if (phase === 'audiometria') {
       const marker = this.pendingMarker();
       if (marker) {
         this.hitMarker(marker);
         return;
       }
-    }
-    if (phase === 'timpanometria') {
-      this.lari.diving = true;
-      this.synth.dive();
-      return;
     }
     if (this.lari.grounded) {
       this.lari.vy = JUMP_V;
@@ -311,6 +392,7 @@ export class GameEngine {
   private handlePressEnd(source: 'pointer' | 'key'): void {
     this.lari.holding = false;
     this.lari.diving = false;
+    this.tymp?.setHolding(false);
     void source;
   }
 
@@ -323,6 +405,7 @@ export class GameEngine {
     if (glow > 0.2) {
       this.score += 60;
       this.combo = Math.min(this.combo + 1, 8);
+      this.irritation = Math.max(0, this.irritation - 3);
       this.setMessage('Reflexo perfeito!', 1.1);
       this.clinic.onCorrect();
     } else {
@@ -345,6 +428,7 @@ export class GameEngine {
     if (perfect) this.perfectCount += 1;
     this.score += Math.round((perfect ? 200 : 100) * this.combo);
     this.combo = Math.min(this.combo + 1, 8);
+    this.irritation = Math.max(0, this.irritation - 4);
     this.lari.vy = BOOST_V;
     this.lari.grounded = false;
     this.lari.speed = Math.min(this.lari.speed + 110, MAX_SPEED);
@@ -363,6 +447,12 @@ export class GameEngine {
     return FREQUENCIES_HZ[idx];
   }
 
+  private get lariMood(): LariMood {
+    if (this.irritation < 30) return 'happy';
+    if (this.irritation < 65) return 'neutral';
+    return 'nervous';
+  }
+
   // ---- Update ----
 
   private update(dt: number): void {
@@ -373,9 +463,13 @@ export class GameEngine {
     }
     this.camShake = Math.max(0, this.camShake - dt * 3);
     this.updateParticles(dt);
+    this.updateHearts(dt);
     this.clinic.update(dt);
 
-    if (this.cheerTimer > 0) this.cheerTimer -= dt;
+    if (this.cheerTimer > 0) {
+      this.cheerTimer -= dt;
+      if (Math.random() < dt * 2.2) this.spawnHearts(1);
+    }
 
     if (this.screen === 'playing') {
       this.updatePlaying(dt);
@@ -390,6 +484,28 @@ export class GameEngine {
 
   private updatePlaying(dt: number): void {
     const phase = PHASE_ORDER[this.phaseIndex];
+    this.irritation = clamp(this.irritation - IRRITATION_DECAY * dt, 0, IRRITATION_MAX);
+    if (this.irritation >= IRRITATION_MAX) {
+      this.doGameOver();
+      return;
+    }
+
+    if (phase === 'timpanometria') {
+      this.updateTympPhase(dt);
+    } else {
+      this.updateRunnerPhase(dt, phase);
+    }
+
+    this.clinic.setMood(this.irritation / 100);
+    this.clinic.setProgress(this.currentProgress(), phase);
+  }
+
+  private currentProgress(): number {
+    if (this.tymp) return this.tymp.overallProgress;
+    return clamp(this.lari.x / this.terrain.length, 0, 1);
+  }
+
+  private updateRunnerPhase(dt: number, phase: PhaseId): void {
     const lari = this.lari;
     const terrain = this.terrain;
 
@@ -397,9 +513,7 @@ export class GameEngine {
     const targetSpeed =
       phase === 'audiometria'
         ? BASE_SPEED + progress * 260
-        : phase === 'timpanometria'
-          ? BASE_SPEED + 60
-          : BASE_SPEED + 120;
+        : BASE_SPEED + 120;
 
     if (lari.grounded) {
       const slope = terrain.slopeAt(lari.x);
@@ -449,6 +563,19 @@ export class GameEngine {
       this.registerGapFall();
     }
 
+    for (const c of this.collectibles) {
+      if (
+        !c.taken &&
+        Math.abs(lari.x - c.x) < 28 &&
+        Math.abs(lari.y + 40 - c.y) < 64
+      ) {
+        c.taken = true;
+        this.score += 25;
+        this.synth.playPureTone(1500, 0.09, 0.08);
+        this.spawnParticles(c.x, c.y, 6, '#7fd8ff');
+      }
+    }
+
     if (phase === 'audiometria') {
       const freqIdx = clamp(
         Math.round((lari.x / terrain.length) * (FREQUENCIES_HZ.length - 1)),
@@ -464,9 +591,10 @@ export class GameEngine {
           m.missed = true;
           this.misses += 1;
           this.combo = 1;
+          this.irritation = clamp(this.irritation + IRRITATION_ON_MISS, 0, IRRITATION_MAX);
           this.clinic.onMiss();
           this.synth.miss();
-          this.setMessage('Limiar perdido… o paciente duvidou!', 1.3);
+          this.setMessage('Limiar perdido… o paciente ficou irritado!', 1.3);
         }
       }
     }
@@ -479,7 +607,62 @@ export class GameEngine {
 
     this.camY = lerp(this.camY, lari.y, Math.min(1, dt * 4));
 
+    if (this.irritation >= IRRITATION_MAX) {
+      this.doGameOver();
+      return;
+    }
+
     if (lari.x >= terrain.length - 240) {
+      this.completePhase();
+    }
+  }
+
+  private updateTympPhase(dt: number): void {
+    const tymp = this.tymp;
+    if (!tymp) return;
+    const event = tymp.update(dt);
+
+    if (event === 'oscillation') {
+      this.misses += 1;
+      this.combo = 1;
+      this.irritation = clamp(this.irritation + IRRITATION_ON_OSCILLATION, 0, IRRITATION_MAX);
+      this.camShake = Math.max(this.camShake, 0.35);
+      this.clinic.onMiss();
+      this.synth.miss();
+      this.setMessage('Traçado fora da faixa! O paciente torceu o nariz…', 1.1);
+    } else if (event === 'peak') {
+      this.score += 150;
+      this.perfectCount += 1;
+      this.irritation = Math.max(0, this.irritation - 5);
+      this.synth.hitThreshold(1000);
+      this.clinic.onCorrect();
+      const px = this.tympAxisX(tymp.currentPressure, this.gameArea());
+      const py = this.tympAxisY(tymp.currentCompliance, this.gameArea());
+      this.spawnScreenParticles(px, py, 12, '#ffd54a');
+      this.setMessage('Pico estabilizado! +150', 1.1);
+    } else if (event === 'typeDone') {
+      const r = tymp.typeResults[tymp.typeResults.length - 1];
+      if (r) {
+        if (r.passed) {
+          this.hits += 1;
+          this.score += 300;
+          this.combo = Math.min(this.combo + 1, 8);
+          this.synth.phaseComplete();
+          this.clinic.onCorrect();
+          this.spawnHearts(1);
+          this.setMessage(`${r.id === 'C' ? 'Tipo C' : `Tipo ${r.id}`}: traçado aprovado! (+300)`, 1.6);
+        } else {
+          this.misses += 1;
+          this.combo = 1;
+          this.irritation = clamp(this.irritation + 10, 0, IRRITATION_MAX);
+          this.synth.miss();
+          this.clinic.onMiss();
+          this.setMessage(`${r.id === 'C' ? 'Tipo C' : `Tipo ${r.id}`}: fora da faixa na maior parte…`, 1.6);
+        }
+      }
+    }
+
+    if (tymp.finished) {
       this.completePhase();
     }
   }
@@ -487,7 +670,7 @@ export class GameEngine {
   private updateWaves(dt: number): void {
     this.waveTimer -= dt;
     const progress = clamp(this.lari.x / this.terrain.length, 0, 1);
-    this.waveInterval = lerp(1.7, 0.95, progress);
+    this.waveInterval = lerp(1.7, 0.85, progress);
     if (this.waveTimer <= 0 && this.lari.x < this.terrain.length - 900) {
       this.waveTimer = this.waveInterval;
       this.waves.push({
@@ -509,6 +692,7 @@ export class GameEngine {
         if (this.shieldTimer > 0) {
           this.score += 80;
           this.hits += 1;
+          this.irritation = Math.max(0, this.irritation - 3);
           this.synth.waveBlocked();
           this.clinic.onCorrect();
           this.spawnParticles(wave.x, wave.y, 12, '#7fd8ff');
@@ -516,12 +700,13 @@ export class GameEngine {
         } else {
           this.misses += 1;
           this.combo = 1;
+          this.irritation = clamp(this.irritation + IRRITATION_ON_WAVE_HIT, 0, IRRITATION_MAX);
           this.camShake = 1;
           this.lari.speed = Math.max(150, this.lari.speed * 0.7);
           this.synth.waveHit();
           this.clinic.onMiss();
           this.spawnParticles(wave.x, wave.y, 12, '#ff7a7a');
-          this.setMessage('A onda atingiu a Lari!', 1.2);
+          this.setMessage('A onda atingiu a Lari! O paciente se irritou…', 1.2);
         }
       }
     }
@@ -548,10 +733,11 @@ export class GameEngine {
     const exitX = gap ? gap.end + 80 : this.lari.x + 200;
     this.misses += 1;
     this.combo = 1;
+    this.irritation = clamp(this.irritation + IRRITATION_ON_GAP_FALL, 0, IRRITATION_MAX);
     this.camShake = 0.8;
     this.synth.miss();
     this.clinic.onMiss();
-    this.setMessage('A Lari caiu no platô do Tipo B! Segure para mergulhar antes.', 1.6);
+    this.setMessage('A Lari caiu no platô do Tipo B! O paciente se irritou…', 1.6);
     this.lari.x = exitX;
     this.lari.y = this.terrain.yAt(exitX) + 120;
     this.lari.vy = 0;
@@ -574,6 +760,38 @@ export class GameEngine {
     if (this.particles.length > 220) this.particles.splice(0, this.particles.length - 220);
   }
 
+  /** Partículas em coordenadas de tela (usadas na Fase 2). */
+  private spawnScreenParticles(sx: number, sy: number, count: number, color: string): void {
+    for (let i = 0; i < count; i++) {
+      this.particles.push({
+        x: sx,
+        y: sy,
+        vx: (Math.random() - 0.5) * 160,
+        vy: -Math.random() * 120 - 40,
+        life: 0.5 + Math.random() * 0.3,
+        maxLife: 1,
+        color,
+      });
+    }
+  }
+
+  private spawnHearts(count: number): void {
+    const area = this.gameArea();
+    const scale = this.worldScale(area);
+    const pos = this.lariScreenPos(area);
+    for (let i = 0; i < count; i++) {
+      this.hearts.push({
+        x: pos.x + (Math.random() - 0.5) * 40,
+        y: pos.y - SPRITE_H * scale * 3 - Math.random() * 20,
+        vy: -60 - Math.random() * 40,
+        wobble: Math.random() * Math.PI * 2,
+        life: 1.4 + Math.random() * 0.6,
+        maxLife: 2,
+        size: 3 + Math.random() * 2,
+      });
+    }
+  }
+
   private updateParticles(dt: number): void {
     for (const p of this.particles) {
       p.x += p.vx * dt;
@@ -582,6 +800,16 @@ export class GameEngine {
       p.life -= dt;
     }
     this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  private updateHearts(dt: number): void {
+    for (const h of this.hearts) {
+      h.y += h.vy * dt;
+      h.wobble += dt * 4;
+      h.x += Math.sin(h.wobble) * 18 * dt;
+      h.life -= dt;
+    }
+    this.hearts = this.hearts.filter((h) => h.life > 0);
   }
 
   private setMessage(text: string, duration: number): void {
@@ -593,7 +821,7 @@ export class GameEngine {
 
   // ---- Layout / estado ----
 
-  private gameArea(): { x: number; y: number; w: number; h: number } {
+  private gameArea(): Area {
     if (this.isPortrait) {
       return { x: 0, y: Math.round(this.height * 0.46), w: this.width, h: Math.round(this.height * 0.54) };
     }
@@ -622,6 +850,7 @@ export class GameEngine {
   private pushState(force: boolean): void {
     if (!force && this.screen !== 'playing') return;
     const phase = PHASE_ORDER[this.phaseIndex];
+    const label = this.tymp ? this.tymp.label() : this.terrain.labelAt(this.lari.x);
     this.onState({
       screen: this.screen,
       phase,
@@ -629,9 +858,9 @@ export class GameEngine {
       hits: this.hits,
       misses: this.misses,
       combo: this.combo,
-      speed: Math.round(this.lari.speed),
-      progress: clamp(this.lari.x / this.terrain.length, 0, 1),
-      frequencyLabel: this.terrain.labelAt(this.lari.x),
+      speed: Math.round(this.tymp ? this.tymp.currentCompliance * 100 : this.lari.speed),
+      progress: this.currentProgress(),
+      frequencyLabel: label,
       message: this.message,
       messageKey: this.messageKey,
       shieldActive: this.shieldTimer > 0,
@@ -640,6 +869,9 @@ export class GameEngine {
       isPortrait: this.isPortrait,
       hasTouch: this.hasTouch,
       muted: this.muted,
+      irritation: this.irritation,
+      lariMood: this.lariMood,
+      phaseHint: this.tymp ? this.tymp.hint() : '',
     });
   }
 
@@ -658,18 +890,56 @@ export class GameEngine {
       );
     }
     this.drawGraphPanel(area);
-    this.drawTerrain(area);
-    this.drawMarkers(area);
-    if (PHASE_ORDER[this.phaseIndex] === 'reflexo' && this.screen !== 'menu') {
-      this.drawWaves(area);
+    if (PHASE_ORDER[this.phaseIndex] === 'timpanometria' && this.screen !== 'menu') {
+      this.drawTympGraph(area);
+      this.drawTympLari(area);
+    } else {
+      this.drawTerrain(area);
+      this.drawCollectibles(area);
+      this.drawMarkers(area);
+      if (PHASE_ORDER[this.phaseIndex] === 'reflexo' && this.screen !== 'menu') {
+        this.drawWaves(area);
+      }
+      this.drawLari(area);
     }
-    this.drawLari(area);
-    this.drawParticles(area);
+    this.drawParticlesScreen(area);
+    this.drawHearts();
     ctx.restore();
   }
 
   private worldScale(area: Area): number {
     return area.w / (this.isPortrait ? 640 : 1000);
+  }
+
+  private camLeft(area: Area): number {
+    return this.lari.x - (this.isPortrait ? 0.3 : 0.36) * area.w / this.worldScale(area);
+  }
+
+  private screenX(x: number, area: Area): number {
+    return area.x + (x - this.camLeft(area)) * this.worldScale(area);
+  }
+
+  private screenY(y: number, area: Area): number {
+    return area.y + area.h * 0.62 - (y - this.camY) * this.worldScale(area);
+  }
+
+  private tympAxisX(p: number, area: Area): number {
+    const pad = area.w * 0.06;
+    return area.x + pad + ((p - -400) / 600) * (area.w - pad * 2);
+  }
+
+  private tympAxisY(c: number, area: Area): number {
+    return area.y + area.h * 0.84 - c * (area.h * 0.68);
+  }
+
+  private lariScreenPos(area: Area): { x: number; y: number } {
+    if (this.tymp && this.screen !== 'menu') {
+      return {
+        x: this.tympAxisX(this.tymp.currentPressure, area),
+        y: this.tympAxisY(this.tymp.currentCompliance, area),
+      };
+    }
+    return { x: this.screenX(this.lari.x, area), y: this.screenY(this.lari.y, area) };
   }
 
   private drawGraphPanel(area: Area): void {
@@ -679,22 +949,22 @@ export class GameEngine {
     grad.addColorStop(1, 'rgba(10, 14, 30, 0.88)');
     ctx.fillStyle = grad;
     ctx.fillRect(area.x, area.y, area.w, area.h);
+
+    const progress = this.currentProgress();
+    const tints: Record<PhaseId, string> = {
+      audiometria: `rgba(255, 150, 90, ${0.09 * progress})`,
+      timpanometria: `rgba(90, 220, 160, ${0.09 * progress})`,
+      reflexo: `rgba(190, 110, 255, ${0.1 * progress})`,
+    };
+    ctx.fillStyle = tints[PHASE_ORDER[this.phaseIndex]];
+    ctx.fillRect(area.x, area.y, area.w, area.h);
+
     ctx.strokeStyle = 'rgba(120, 160, 255, 0.35)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(area.x, area.y + 1);
     ctx.lineTo(area.x + area.w, area.y + 1);
     ctx.stroke();
-  }
-
-  private screenX(x: number, area: Area): number {
-    const scale = this.worldScale(area);
-    return area.x + (x - (this.lari.x - (this.isPortrait ? 0.3 : 0.36) * area.w / scale)) * scale;
-  }
-
-  private screenY(y: number, area: Area): number {
-    const scale = this.worldScale(area);
-    return area.y + area.h * 0.62 - (y - this.camY) * scale;
   }
 
   private drawTerrain(area: Area): void {
@@ -714,7 +984,7 @@ export class GameEngine {
         ctx.lineWidth = 3;
         ctx.beginPath();
         for (let px = 0; px <= area.w; px += stepPx) {
-          const wx = this.lari.x - (this.isPortrait ? 0.3 : 0.36) * area.w / scale + px / scale;
+          const wx = this.camLeft(area) + px / scale;
           const sy = this.screenY(this.terrain.yAt(wx) + 30, area);
           if (px === 0) ctx.moveTo(px, sy);
           else ctx.lineTo(px, sy);
@@ -731,7 +1001,7 @@ export class GameEngine {
       ctx.beginPath();
       let pen = false;
       for (let px = 0; px <= area.w + stepPx; px += stepPx) {
-        const wx = this.lari.x - (this.isPortrait ? 0.3 : 0.36) * area.w / scale + px / scale;
+        const wx = this.camLeft(area) + px / scale;
         const gap = this.terrain.gaps.some((g) => wx > g.start && wx < g.end);
         const sy = this.screenY(this.terrain.yAt(wx), area);
         if (gap || sy > area.y + area.h + 40) {
@@ -763,6 +1033,32 @@ export class GameEngine {
         ctx.stroke();
         ctx.fillText(`${db} dB`, area.x + 6, sy - 4);
       });
+    }
+    ctx.restore();
+  }
+
+  private drawCollectibles(area: Area): void {
+    if (this.screen === 'menu' || this.collectibles.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.x, area.y, area.w, area.h);
+    ctx.clip();
+    for (const c of this.collectibles) {
+      if (c.taken) continue;
+      const sx = this.screenX(c.x, area);
+      const sy = this.screenY(c.y, area);
+      if (sx < area.x - 20 || sx > area.x + area.w + 20) continue;
+      const pulse = 1 + Math.sin(this.animTime * 6 + c.x) * 0.2;
+      ctx.strokeStyle = 'rgba(127, 216, 255, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 6 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(127, 216, 255, 0.35)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -809,6 +1105,179 @@ export class GameEngine {
     ctx.textAlign = 'left';
   }
 
+  /** Fase 2 — gráfico timpanométrico com alvo tracejado, faixa e traçado do jogador. */
+  private drawTympGraph(area: Area): void {
+    const ctx = this.ctx;
+    const tymp = this.tymp;
+    if (!tymp) return;
+    const spec = tymp.spec;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.x, area.y, area.w, area.h);
+    ctx.clip();
+
+    ctx.font = '10px monospace';
+    ctx.fillStyle = 'rgba(200, 215, 255, 0.6)';
+    ctx.strokeStyle = 'rgba(140, 170, 230, 0.14)';
+    ctx.lineWidth = 1;
+    for (let p = -400; p <= 200; p += 100) {
+      const sx = this.tympAxisX(p, area);
+      ctx.beginPath();
+      ctx.moveTo(sx, area.y);
+      ctx.lineTo(sx, area.y + area.h);
+      ctx.stroke();
+      ctx.fillText(`${p > 0 ? '+' : ''}${p}`, sx - 10, area.y + area.h - 6);
+    }
+    for (let c = 0; c <= 1.001; c += 0.25) {
+      const sy = this.tympAxisY(c, area);
+      ctx.beginPath();
+      ctx.moveTo(area.x, sy);
+      ctx.lineTo(area.x + area.w, sy);
+      ctx.stroke();
+      ctx.fillText(c.toFixed(2), area.x + 6, sy - 4);
+    }
+
+    const targetAt = (p: number): number => {
+      const d = (p - spec.peak) / spec.width;
+      return spec.height * Math.exp(-d * d);
+    };
+
+    ctx.fillStyle = 'rgba(255, 213, 74, 0.12)';
+    ctx.beginPath();
+    let started = false;
+    for (let p = -400; p <= 200; p += 8) {
+      const sx = this.tympAxisX(p, area);
+      const sy = this.tympAxisY(targetAt(p) + spec.tol, area);
+      if (!started) {
+        ctx.moveTo(sx, sy);
+        started = true;
+      } else ctx.lineTo(sx, sy);
+    }
+    for (let p = 200; p >= -400; p -= 8) {
+      const sx = this.tympAxisX(p, area);
+      ctx.lineTo(sx, this.tympAxisY(Math.max(0, targetAt(p) - spec.tol), area));
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 6]);
+    ctx.beginPath();
+    for (let p = -400; p <= 200; p += 6) {
+      const sx = this.tympAxisX(p, area);
+      const sy = this.tympAxisY(targetAt(p), area);
+      if (p === -400) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const trace = tymp.tracePoints;
+    if (trace.length > 1) {
+      ctx.lineWidth = 4;
+      for (let i = 1; i < trace.length; i++) {
+        const a = trace[i - 1];
+        const b = trace[i];
+        ctx.strokeStyle = b.inBand ? '#3ddc97' : '#ff5f6d';
+        ctx.beginPath();
+        ctx.moveTo(this.tympAxisX(a.p, area), this.tympAxisY(a.c, area));
+        ctx.lineTo(this.tympAxisX(b.p, area), this.tympAxisY(b.c, area));
+        ctx.stroke();
+      }
+    }
+
+    const cx = this.tympAxisX(tymp.currentPressure, area);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, area.y);
+    ctx.lineTo(cx, area.y + area.h);
+    ctx.stroke();
+
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText(spec.name, area.x + 14, area.y + 24);
+    if (tymp.currentState === 'break') {
+      const last = tymp.typeResults[tymp.typeResults.length - 1];
+      if (last) {
+        ctx.font = 'bold 13px monospace';
+        ctx.fillStyle = last.passed ? '#7dff9b' : '#ff7a7a';
+        ctx.fillText(
+          `${last.passed ? '✓ APROVADO' : '✗ REPROVADO'} · precisão ${(last.accuracy * 100).toFixed(0)}% · oscilações: ${last.oscillations}`,
+          area.x + 14,
+          area.y + 46,
+        );
+      }
+    } else {
+      ctx.font = '12px monospace';
+      ctx.fillStyle = 'rgba(200, 215, 255, 0.8)';
+      ctx.fillText(
+        `Varredura ${tymp.typeResults.length + 1}/${tymp.types.length} · precisão do segmento: ${Math.round(this.tympBandRatio() * 100)}%`,
+        area.x + 14,
+        area.y + 46,
+      );
+    }
+    ctx.restore();
+  }
+
+  private tympBandRatio(): number {
+    const tymp = this.tymp;
+    if (!tymp) return 0;
+    const trace = tymp.tracePoints;
+    if (trace.length === 0) return 1;
+    const inBand = trace.filter((t) => t.inBand).length;
+    return inBand / trace.length;
+  }
+
+  private drawTympLari(area: Area): void {
+    const ctx = this.ctx;
+    const tymp = this.tymp;
+    if (!tymp) return;
+    const scale = this.worldScale(area);
+    const pixelScale = clamp(scale * 4.6, 2.4, 4.2);
+    const pos = this.lariScreenPos(area);
+
+    let frame: number = LARI_FRAMES.run[0];
+    if (tymp.currentState === 'break') {
+      const last = tymp.typeResults[tymp.typeResults.length - 1];
+      frame = last?.passed ? LARI_FRAMES.cheer[Math.floor(this.animTime * 6) % 2] : LARI_FRAMES.idle;
+    } else if (tymp.isHolding) {
+      frame = LARI_FRAMES.jump;
+    } else {
+      frame = LARI_FRAMES.run[Math.floor(this.animTime * 8) % 4];
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.x, area.y - 10, area.w, area.h + 10);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(pos.x, this.tympAxisY(0, area));
+    ctx.stroke();
+
+    ctx.translate(pos.x, pos.y);
+    ctx.drawImage(
+      this.sprites.canvas,
+      frame * SPRITE_W,
+      0,
+      SPRITE_W,
+      SPRITE_H,
+      (-SPRITE_W / 2) * pixelScale,
+      -SPRITE_H * pixelScale,
+      SPRITE_W * pixelScale,
+      SPRITE_H * pixelScale,
+    );
+    this.drawMoodMarks(ctx, pixelScale);
+    ctx.restore();
+  }
+
   private drawWaves(area: Area): void {
     const ctx = this.ctx;
     ctx.save();
@@ -837,16 +1306,18 @@ export class GameEngine {
     const ctx = this.ctx;
     const scale = this.worldScale(area);
     const pixelScale = clamp(scale * 4.6, 2.4, 4.2);
-    const sx = this.screenX(this.lari.x, area);
-    const sy = this.screenY(this.lari.y, area);
+    const pos = this.lariScreenPos(area);
+    const sx = pos.x;
+    const sy = pos.y;
 
     let frame: number = LARI_FRAMES.idle;
+    const mood = this.lariMood;
     if (this.cheerTimer > 0) {
       frame = LARI_FRAMES.cheer[Math.floor(this.animTime * 6) % 2];
     } else if (this.screen === 'playing') {
       if (this.lari.grounded) {
-        if (this.lari.holding && !this.lari.diving) frame = LARI_FRAMES.run[Math.floor(this.animTime * 14) % 4];
-        else frame = LARI_FRAMES.run[Math.floor((this.animTime * this.lari.speed) / 34) % 4];
+        const animSpeed = mood === 'nervous' ? 1.45 : 1;
+        frame = LARI_FRAMES.run[Math.floor((this.animTime * this.lari.speed * animSpeed) / 34) % 4];
       } else if (this.lari.diving || this.lari.vy < -80) {
         frame = LARI_FRAMES.dive;
       } else {
@@ -869,7 +1340,7 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    const tilt = this.lari.grounded ? 0 : clamp(this.lari.vy / 1400, -0.3, 0.35);
+    const tilt = this.lari.grounded || this.tymp ? 0 : clamp(this.lari.vy / 1400, -0.3, 0.35);
     ctx.translate(sx, sy);
     ctx.rotate(tilt);
     ctx.drawImage(
@@ -883,19 +1354,67 @@ export class GameEngine {
       SPRITE_W * pixelScale,
       SPRITE_H * pixelScale,
     );
+    this.drawMoodMarks(ctx, pixelScale);
     ctx.restore();
   }
 
-  private drawParticles(area: Area): void {
+  /** Suor quando nervosa, coração quando muito feliz. */
+  private drawMoodMarks(ctx: CanvasRenderingContext2D, pixelScale: number): void {
+    const mood = this.lariMood;
+    if (mood === 'nervous') {
+      const bob = Math.sin(this.animTime * 10) * 2;
+      ctx.fillStyle = '#7fd8ff';
+      ctx.fillRect(-SPRITE_W * 0.5 * pixelScale - 4, -SPRITE_H * pixelScale * 0.9 + bob, 2 * pixelScale * 0.6, 3 * pixelScale * 0.6);
+      ctx.fillRect(SPRITE_W * 0.5 * pixelScale + 2, -SPRITE_H * pixelScale * 0.95 - bob, 2 * pixelScale * 0.6, 3 * pixelScale * 0.6);
+    } else if (mood === 'happy' && this.combo >= 3 && Math.sin(this.animTime * 2) > 0.55) {
+      const s = pixelScale * 0.9;
+      this.drawPixelHeart(ctx, SPRITE_W * 0.5 * pixelScale + 4, -SPRITE_H * pixelScale - 6, s, '#ff5f7a');
+    }
+  }
+
+  private drawPixelHeart(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number, color: string): void {
+    ctx.fillStyle = color;
+    const w = HEART_MATRIX[0].length;
+    const h = HEART_MATRIX.length;
+    for (let row = 0; row < h; row++) {
+      let col = 0;
+      while (col < w) {
+        if (HEART_MATRIX[row][col] === 'X') {
+          let run = 1;
+          while (col + run < w && HEART_MATRIX[row][col + run] === 'X') run++;
+          ctx.fillRect(cx + (col - w / 2) * s, cy + (row - h / 2) * s, run * s, s);
+          col += run;
+        } else {
+          col++;
+        }
+      }
+    }
+  }
+
+  private drawHearts(): void {
+    const ctx = this.ctx;
+    for (const heart of this.hearts) {
+      ctx.save();
+      ctx.globalAlpha = clamp(heart.life / 0.8, 0, 1);
+      this.drawPixelHeart(ctx, heart.x, heart.y, heart.size, '#ff5f7a');
+      ctx.fillStyle = '#ffb3c0';
+      ctx.fillRect(heart.x - heart.size * 1.1, heart.y - heart.size * 0.9, heart.size * 0.7, heart.size * 0.7);
+      ctx.restore();
+    }
+  }
+
+  /** Partículas: as da Fase 2 já estão em coordenadas de tela; as demais são convertidas. */
+  private drawParticlesScreen(area: Area): void {
     const ctx = this.ctx;
     const scale = this.worldScale(area);
     ctx.save();
     ctx.beginPath();
     ctx.rect(area.x, area.y, area.w, area.h);
     ctx.clip();
+    const isTymp = PHASE_ORDER[this.phaseIndex] === 'timpanometria';
     for (const p of this.particles) {
-      const sx = this.screenX(p.x, area);
-      const sy = this.screenY(p.y, area);
+      const sx = isTymp ? p.x : this.screenX(p.x, area);
+      const sy = isTymp ? p.y : this.screenY(p.y, area);
       ctx.globalAlpha = clamp(p.life, 0, 1);
       ctx.fillStyle = p.color;
       const s = 3 * scale * 1.6;
