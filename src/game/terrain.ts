@@ -55,6 +55,24 @@ function buildTerrain(
 const dbToY = (db: number): number => (95 - clamp(db, -10, 120)) * 1.7;
 
 /** Fase 1 — audiograma: limiares OD (O) / OE (X) de 250Hz a 8000Hz. */
+/**
+ * Um obstáculo de ruído só é justo se a Lari estiver no chão com controle total:
+ * terreno plano/gentil, longe da zona de pouso após abismos e quedas bruscas e
+ * longe dos marcadores de limiar (para não conflitar com o salto do impulso).
+ */
+export function isSafeObstacleSpot(terrain: Terrain, x: number): boolean {
+  for (const dx of [-70, -35, 0, 35, 70]) {
+    if (Math.abs(terrain.slopeAt(x + dx)) > 0.5) return false;
+  }
+  for (const g of terrain.gaps) {
+    if (x > g.start - 520 && x < g.end + 420) return false;
+  }
+  for (const m of terrain.markers) {
+    if (Math.abs(x - m.x) < 240) return false;
+  }
+  return true;
+}
+
 export function createAudiometryTerrain(seed: number, length: number): Terrain {
   const rng = makeRng(seed);
   const freqs = [250, 500, 1000, 2000, 4000, 8000];

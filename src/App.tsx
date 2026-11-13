@@ -25,6 +25,7 @@ const INITIAL_STATE: HudState = {
   lariMood: 'happy' as const,
   phaseHint: '',
   quiz: null,
+  quizChosen: null,
   gameOverReason: '',
   toastyKey: 0,
 };

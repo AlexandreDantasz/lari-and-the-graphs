@@ -42,6 +42,7 @@ export interface HudState {
   lariMood: LariMood;
   phaseHint: string;
   quiz: QuizData | null;
+  quizChosen: number | null;
   gameOverReason: string;
   toastyKey: number;
 }
@@ -80,6 +81,8 @@ export interface QuizData {
   options: string[];
   correct: number;
   explain: string;
+  image?: string;
+  imageCaption?: string;
 }
 
 export const PHASES: Record<PhaseId, PhaseConfig> = {

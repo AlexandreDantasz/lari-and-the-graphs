@@ -677,6 +677,102 @@ body,
   letter-spacing: 0.06em;
 }
 
+.quiz-memory {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  width: min(92vw, 520px);
+}
+
+.quiz-chart {
+  width: 100%;
+  max-width: 520px;
+  border: 1px solid rgba(120, 160, 255, 0.4);
+  border-radius: 10px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  background: #fdf9f2;
+}
+
+.quiz-caption {
+  font-size: 10px;
+  color: #9aa7c0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.quiz-option:disabled {
+  cursor: default;
+  opacity: 0.75;
+  transform: none;
+}
+
+.quiz-option.is-correct {
+  border-color: #37d67a;
+  background: rgba(22, 74, 46, 0.9);
+  opacity: 1;
+  box-shadow: 0 0 14px rgba(55, 214, 122, 0.35);
+}
+
+.quiz-option.is-wrong {
+  border-color: #ff5f6d;
+  background: rgba(84, 24, 34, 0.9);
+  opacity: 1;
+}
+
+.quiz-feedback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(92vw, 480px);
+}
+
+.quiz-verdict {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.quiz-verdict.ok {
+  color: #37d67a;
+}
+
+.quiz-verdict.bad {
+  color: #ff8a93;
+}
+
+.quiz-explain {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #c8d2ea;
+  background: rgba(20, 27, 50, 0.75);
+  border: 1px solid rgba(120, 160, 255, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.quiz-continue {
+  font-size: 14px;
+  font-weight: 800;
+  padding: 12px 30px;
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid rgba(127, 216, 255, 0.6);
+  background: linear-gradient(180deg, rgba(52, 96, 204, 0.95), rgba(30, 58, 138, 0.95));
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.quiz-continue:hover {
+  filter: brightness(1.15);
+}
+
+.quiz-continue:active {
+  transform: scale(0.97);
+}
+
 /* ---------- Lari 2D nos menus / laudo final ---------- */
 .menu-hero {
   display: flex;

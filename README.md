@@ -50,12 +50,16 @@ conceito de fonoaudiologia envolvido:
   (tracejadas e cinzas — não ative o escudo); o brilho no fone só acende para
   respostas presentes.
 
-### Quiz do laudo
+### Quiz do laudo (com memória do exame)
 
-Ao fim de cada gráfico o jogo pausa e mostra o **Laudo do Paciente**: 3 opções de
-diagnóstico baseadas no traçado jogado (ex.: "Perda neurossensorial em rampa",
-"Curva Timpanométrica Tipo C", "Integridade da via auditiva — VII e VIII pares").
-**Acertou: +400 pontos. Errou: Game Over imediato!**
+Ao fim de cada gráfico o jogo pausa e mostra o **Laudo do Paciente** com a
+**memória do exame**: um gráfico gerado a partir do que você acabou de fazer
+(o audiograma com seus limiares registrados, o traçado timpanométrico real
+sobre a curva alvo, ou os estímulos do reflexo com ✓/✗ das suas respostas).
+A pergunta se refere a esse gráfico — consulte-o antes de responder!
+
+O quiz **não é eliminativo**: acertou, +400 pontos; errou, a resposta correta
+fica destacada com a explicação clínica e o jogo simplesmente continua.
 
 ## Toasty! 🍞
 

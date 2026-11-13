@@ -216,23 +216,56 @@ function QuizScreen({ state, engineRef }: { state: HudState; engineRef: Props['e
   const quiz = state.quiz;
   if (!quiz) return null;
   const labels = ['A', 'B', 'C'];
+  const chosen = state.quizChosen;
+  const answered = chosen !== null;
+  const isCorrect = answered && chosen === quiz.correct;
   return (
     <div className="overlay quiz-overlay">
       <h2>📝 Laudo do Paciente</h2>
+      {quiz.image && (
+        <figure className="quiz-memory">
+          <img className="quiz-chart" src={quiz.image} alt="Memória do exame realizado" />
+          {quiz.imageCaption && (
+            <figcaption className="quiz-caption">{quiz.imageCaption}</figcaption>
+          )}
+        </figure>
+      )}
       <p className="quiz-question">{quiz.question}</p>
       <div className="quiz-options">
-        {quiz.options.map((option, i) => (
-          <button
-            key={option}
-            className="quiz-option"
-            onClick={() => engineRef.current?.answerQuiz(i)}
-          >
-            <span className="quiz-letter">{labels[i] ?? '?'}</span>
-            {option}
-          </button>
-        ))}
+        {quiz.options.map((option, i) => {
+          let cls = 'quiz-option';
+          if (answered && i === quiz.correct) cls += ' is-correct';
+          else if (answered && i === chosen) cls += ' is-wrong';
+          return (
+            <button
+              key={option}
+              className={cls}
+              disabled={answered}
+              onClick={() => engineRef.current?.answerQuiz(i)}
+            >
+              <span className="quiz-letter">{labels[i] ?? '?'}</span>
+              {option}
+            </button>
+          );
+        })}
       </div>
-      <p className="quiz-warning">⚠ Diagnóstico errado = Game Over imediato!</p>
+      {answered ? (
+        <div className="quiz-feedback">
+          <p className={isCorrect ? 'quiz-verdict ok' : 'quiz-verdict bad'}>
+            {isCorrect
+              ? '✅ Diagnóstico correto! Laudo assinado (+400)'
+              : `❌ Não foi essa. A correta está destacada: "${quiz.options[quiz.correct]}"`}
+          </p>
+          <p className="quiz-explain">{quiz.explain}</p>
+          <button className="quiz-continue" onClick={() => engineRef.current?.continueAfterQuiz()}>
+            Continuar ▶
+          </button>
+        </div>
+      ) : (
+        <p className="quiz-warning">
+          📖 O gráfico acima é a memória do exame — consulte-o antes de responder!
+        </p>
+      )}
     </div>
   );
 }

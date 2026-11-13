@@ -1,9 +1,21 @@
 import { AudiometerSynth } from './audio/AudiometerSynth';
 import { InputController } from './input';
-import { createAudiometryTerrain, createReflexTerrain, Terrain } from './terrain';
+import {
+  createAudiometryTerrain,
+  createReflexTerrain,
+  isSafeObstacleSpot,
+  Terrain,
+} from './terrain';
 import { buildLariSpriteSheet, LARI_FRAMES, LariSpriteSheet, SPRITE_H, SPRITE_W } from './sprites/lari';
 import { ClinicScene } from './three/clinic';
-import { TympScan, targetCompliance, JergerId, JERGER_SPECS } from './tympanometry';
+import {
+  TympScan,
+  targetCompliance,
+  JergerId,
+  JERGER_SPECS,
+  TYMP_P_MAX,
+  TYMP_P_MIN,
+} from './tympanometry';
 import {
   FREQUENCIES_HZ,
   HudState,
@@ -148,6 +160,8 @@ export class GameEngine {
   private cheerTimer = 0;
   private shieldTimer = 0;
   private shieldUsed = false;
+  private reflexLog: { present: boolean; ok: boolean }[] = [];
+  private quizChosen: number | null = null;
   private waves: Wave[] = [];
   private waveTimer = 0;
   private waveInterval = 1.7;
@@ -267,27 +281,34 @@ export class GameEngine {
   }
 
   answerQuiz(index: number): void {
-    if (this.screen !== 'quiz' || !this.quiz) return;
+    if (this.screen !== 'quiz' || !this.quiz || this.quizChosen !== null) return;
+    this.quizChosen = index;
     if (index === this.quiz.correct) {
       this.score += 400;
       this.setMessage('\u2705 Diagnóstico correto! Laudo assinado (+400)', 1.8);
-      this.quiz = null;
-      this.screen = 'phaseResults';
-      this.spawnHearts(3);
       this.synth.phaseComplete();
-      this.pushState(true);
     } else {
-      const correct = this.quiz.options[this.quiz.correct];
-      this.doGameOver(
-        `Laudo reprovado! Você escolheu o diagnóstico errado. Correto: "${correct}". ${this.quiz.explain}`,
-      );
+      this.setMessage('\ud83d\udcd6 Sem problema: confira a resposta correta e siga em frente.', 2.4);
+      this.synth.miss();
     }
+    this.pushState(true);
+  }
+
+  continueAfterQuiz(): void {
+    if (this.screen !== 'quiz') return;
+    this.quiz = null;
+    this.quizChosen = null;
+    this.screen = 'phaseResults';
+    this.spawnHearts(3);
+    this.synth.phaseComplete();
+    this.pushState(true);
   }
 
   retryPhase(): void {
     this.synth.unlock();
     this.credibility = 60;
     this.quiz = null;
+    this.quizChosen = null;
     this.gameOverReason = '';
     this.hits = 0;
     this.misses = 0;
@@ -300,6 +321,7 @@ export class GameEngine {
     this.screen = 'menu';
     this.credibility = CRED_MAX;
     this.quiz = null;
+    this.quizChosen = null;
     this.gameOverReason = '';
     this.pushState(true);
   }
@@ -347,6 +369,8 @@ export class GameEngine {
     this.waveInterval = 1.7;
     this.shieldTimer = 0;
     this.shieldUsed = false;
+    this.reflexLog = [];
+    this.quizChosen = null;
     this.particles = [];
     this.hearts = [];
     this.collectibles = [];
@@ -369,8 +393,8 @@ export class GameEngine {
 
     if (id === 'audiometria') {
       const orng = makeRng(this.phaseSeed + 555);
-      for (let x = 900; x < this.terrain.length - 520; x += 640 + orng() * 520) {
-        if (this.terrain.gaps.some((g) => x > g.start - 70 && x < g.end + 70)) continue;
+      for (let x = 900; x < this.terrain.length - 520; x += 700 + orng() * 560) {
+        if (!isSafeObstacleSpot(this.terrain, x)) continue;
         this.obstacles.push({ x, y: this.terrain.yAt(x) + 26, hit: false });
       }
     }
@@ -406,6 +430,7 @@ export class GameEngine {
     this.perfectCount = 0;
     this.maxSpeedSeen = 0;
     this.cheerTimer = 3.2;
+    this.quizChosen = null;
     this.quiz = this.buildQuiz(id);
     this.screen = 'quiz';
     this.clinic.focusLari();
@@ -444,9 +469,226 @@ export class GameEngine {
   // ---- Quiz (laudo clínico) ----
 
   private buildQuiz(id: PhaseId): QuizData {
-    if (id === 'audiometria') return this.buildAudiometryQuiz();
-    if (id === 'timpanometria') return this.buildTympQuiz();
-    return this.buildReflexQuiz();
+    const data =
+      id === 'audiometria'
+        ? this.buildAudiometryQuiz()
+        : id === 'timpanometria'
+          ? this.buildTympQuiz()
+          : this.buildReflexQuiz();
+    data.image = this.buildQuizImage(id);
+    data.imageCaption =
+      id === 'audiometria'
+        ? 'Memória do exame · o audiograma que você acabou de traçar'
+        : id === 'timpanometria'
+          ? 'Memória do exame · seu traçado (azul) × curva alvo (tracejada)'
+          : 'Memória do exame · estímulos apresentados e suas respostas';
+    return data;
+  }
+
+  /** Desenha a "memória" do exame: o traçado real produzido pelo jogador. */
+  private buildQuizImage(id: PhaseId): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 560;
+    canvas.height = 260;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    ctx.fillStyle = '#fdf9f2';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (id === 'audiometria') this.drawAudiogramMemory(ctx);
+    else if (id === 'timpanometria') this.drawTympMemory(ctx);
+    else this.drawReflexMemory(ctx);
+    return canvas.toDataURL('image/png');
+  }
+
+  private drawAudiogramMemory(ctx: CanvasRenderingContext2D): void {
+    const W = 560;
+    const H = 260;
+    const left = 52;
+    const right = 18;
+    const top = 16;
+    const bottom = 40;
+    const terrain = this.terrain;
+    const yMin = terrain.minY - 20;
+    const yMax = terrain.maxY + 20;
+    const px = (x: number) => left + (x / terrain.length) * (W - left - right);
+    const py = (y: number) => top + ((y - yMin) / (yMax - yMin)) * (H - top - bottom);
+
+    ctx.strokeStyle = '#d8d2c4';
+    ctx.lineWidth = 1;
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#6b6455';
+    ctx.textAlign = 'right';
+    for (const db of [0, 25, 50, 75]) {
+      const y = py((95 - db) * 1.7);
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(W - right, y);
+      ctx.stroke();
+      ctx.fillText(`${db} dB`, left - 6, y + 3);
+    }
+    ctx.textAlign = 'center';
+    for (const m of terrain.markers) {
+      ctx.fillText(terrain.labelAt(m.x), px(m.x), H - bottom + 14);
+    }
+
+    ctx.strokeStyle = '#8a5a2b';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    for (let x = 0; x <= terrain.length; x += 24) {
+      const sx = px(x);
+      const sy = py(terrain.yAt(x));
+      if (x === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+
+    for (const m of terrain.markers) {
+      const sx = px(m.x);
+      const sy = py(m.y);
+      const color = m.hit ? '#1e9e4a' : m.missed ? '#d43a3a' : '#7c86a0';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 2.6;
+      if (m.label === 'O') {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(sx - 5, sy - 5);
+        ctx.lineTo(sx + 5, sy + 5);
+        ctx.moveTo(sx + 5, sy - 5);
+        ctx.lineTo(sx - 5, sy + 5);
+        ctx.stroke();
+      }
+    }
+  }
+
+  private drawTympMemory(ctx: CanvasRenderingContext2D): void {
+    const W = 560;
+    const H = 260;
+    const left = 46;
+    const right = 18;
+    const top = 16;
+    const bottom = 40;
+    const pMin = TYMP_P_MIN;
+    const pMax = TYMP_P_MAX;
+    const cMax = 1.1;
+    const px = (p: number) => left + ((p - pMin) / (pMax - pMin)) * (W - left - right);
+    const py = (c: number) => H - bottom - (c / cMax) * (H - top - bottom);
+
+    ctx.strokeStyle = '#d8d2c4';
+    ctx.lineWidth = 1;
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#6b6455';
+    ctx.textAlign = 'center';
+    for (const p of [-400, -300, -200, -100, 0, 100, 200]) {
+      ctx.beginPath();
+      ctx.moveTo(px(p), top);
+      ctx.lineTo(px(p), H - bottom);
+      ctx.stroke();
+      ctx.fillText(`${p}`, px(p), H - bottom + 14);
+    }
+    ctx.textAlign = 'right';
+    for (const c of [0.5, 1.0]) {
+      ctx.beginPath();
+      ctx.moveTo(left, py(c));
+      ctx.lineTo(W - right, py(c));
+      ctx.stroke();
+      ctx.fillText(`${c.toFixed(1)}`, left - 6, py(c) + 3);
+    }
+    ctx.fillText('daPa', W - right, H - bottom + 14);
+
+    const results = this.tymp?.typeResults ?? [];
+    const worst =
+      results.length > 0
+        ? results.reduce((acc, r) => (r.accuracy < acc.accuracy ? r : acc), results[0])
+        : null;
+    const spec = JERGER_SPECS.find((s) => s.id === (worst?.id ?? 'A')) ?? JERGER_SPECS[0];
+    ctx.strokeStyle = '#a09a8a';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    for (let p = pMin; p <= pMax; p += 4) {
+      const sx = px(p);
+      const sy = py(targetCompliance(spec, p));
+      if (p === pMin) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const trace = this.tymp?.tracePoints ?? [];
+    if (trace.length > 1) {
+      ctx.strokeStyle = '#1f7ae0';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      let prevP = trace[0].p;
+      ctx.moveTo(px(trace[0].p), py(trace[0].c));
+      for (let i = 1; i < trace.length; i += 1) {
+        const pt = trace[i];
+        if (pt.p < prevP - 40) {
+          ctx.moveTo(px(pt.p), py(pt.c));
+        } else {
+          ctx.lineTo(px(pt.p), py(pt.c));
+        }
+        prevP = pt.p;
+      }
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#6b6455';
+      ctx.textAlign = 'center';
+      ctx.fillText('Traçado indisponível', W / 2, H / 2);
+    }
+  }
+
+  private drawReflexMemory(ctx: CanvasRenderingContext2D): void {
+    const W = 560;
+    const H = 260;
+    const log = this.reflexLog;
+    ctx.font = '10px monospace';
+    if (log.length === 0) {
+      ctx.fillStyle = '#6b6455';
+      ctx.textAlign = 'center';
+      ctx.fillText('Nenhum estímulo avaliado', W / 2, H / 2);
+      return;
+    }
+    const colW = Math.min(64, (W - 40) / log.length);
+    const totalW = colW * log.length;
+    const startX = (W - totalW) / 2;
+    const cy = H / 2 - 12;
+    log.forEach((entry, i) => {
+      const cx = startX + i * colW + colW / 2;
+      if (entry.present) {
+        ctx.strokeStyle = '#1f7ae0';
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        for (const r of [15, 21]) {
+          ctx.globalAlpha = 0.55;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, -Math.PI / 3, Math.PI / 3);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      } else {
+        ctx.strokeStyle = '#9aa3b5';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = entry.ok ? '#1e9e4a' : '#d43a3a';
+      ctx.font = 'bold 20px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(entry.ok ? '✓' : '✗', cx, cy + 44);
+      ctx.font = '9px monospace';
+      ctx.fillStyle = '#6b6455';
+      ctx.fillText(entry.present ? 'presente' : 'ausente', cx, cy + 58);
+    });
   }
 
   private buildAudiometryQuiz(): QuizData {
@@ -786,9 +1028,9 @@ export class GameEngine {
     for (const o of this.obstacles) {
       if (
         !o.hit &&
-        Math.abs(lari.x - o.x) < 22 &&
-        lari.y < o.y + 42 &&
-        lari.y > o.y - 30
+        Math.abs(lari.x - o.x) < 18 &&
+        lari.y < o.y + 34 &&
+        lari.y > o.y - 24
       ) {
         o.hit = true;
         lari.speed = Math.max(150, lari.speed * 0.6);
@@ -941,6 +1183,7 @@ export class GameEngine {
         if (wave.present) {
           if (this.shieldTimer > 0) {
             this.shieldUsed = true;
+            this.reflexLog.push({ present: true, ok: true });
             this.score += 80;
             this.hits += 1;
             this.addCredibility(+2);
@@ -949,6 +1192,7 @@ export class GameEngine {
             this.spawnParticles(wave.x, wave.y, 12, '#7fd8ff');
             this.setMessage('Onda bloqueada pelo reflexo! Resposta presente confirmada.', 1.2);
           } else {
+            this.reflexLog.push({ present: true, ok: false });
             this.misses += 1;
             this.combo = 1;
             this.camShake = 1;
@@ -964,6 +1208,7 @@ export class GameEngine {
           }
         } else if (this.shieldTimer > 0 && !this.shieldUsed) {
           this.shieldUsed = true;
+          this.reflexLog.push({ present: false, ok: false });
           this.misses += 1;
           this.combo = 1;
           this.clinic.onMiss();
@@ -974,6 +1219,7 @@ export class GameEngine {
           );
           if (this.screen !== 'playing') return;
         } else {
+          this.reflexLog.push({ present: false, ok: true });
           this.score += 30;
           this.hits += 1;
           this.addCredibility(+1);
@@ -1151,6 +1397,7 @@ export class GameEngine {
       lariMood: this.lariMood,
       phaseHint: this.tymp ? this.tymp.hint() : '',
       quiz: this.quiz,
+      quizChosen: this.quizChosen,
       gameOverReason: this.gameOverReason,
       toastyKey: this.toastyKey,
     });
@@ -1381,6 +1628,16 @@ export class GameEngine {
         ctx.arc(sx, sy, 8 * s * pulse, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 1;
+        const dist = o.x - this.lari.x;
+        if (dist > 0 && dist < 620) {
+          const blink = 0.55 + 0.45 * Math.sin(this.animTime * 10);
+          ctx.globalAlpha = blink;
+          ctx.fillStyle = '#ffd54a';
+          ctx.font = `bold ${Math.round(13 * s)}px monospace`;
+          ctx.textAlign = 'center';
+          ctx.fillText('\u26a0', sx, sy - 12 * s);
+          ctx.globalAlpha = 1;
+        }
       }
     }
     ctx.restore();
