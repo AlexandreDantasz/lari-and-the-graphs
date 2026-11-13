@@ -82,23 +82,26 @@ function drawBase(ctx: CanvasRenderingContext2D, ox: number, oy: number): void {
 }
 
 interface LegPose {
-  x: number;
+  hip: number;
+  thighDx: number;
   thighRows: number;
   shinDx: number;
   shinRows: number;
 }
 
 function drawLeg(ctx: CanvasRenderingContext2D, ox: number, oy: number, leg: LegPose): void {
-  drawMatrixPixel(ctx, PALETTE.P, ox + leg.x, oy + 20, 4, leg.thighRows);
+  const thighX = leg.hip + leg.thighDx;
+  drawMatrixPixel(ctx, PALETTE.P, ox + thighX, oy + 20, 4, leg.thighRows);
+  const shinX = thighX + leg.shinDx;
+  drawMatrixPixel(ctx, PALETTE.P, ox + shinX, oy + 20 + leg.thighRows, 4, leg.shinRows);
   drawMatrixPixel(
     ctx,
-    PALETTE.P,
-    ox + leg.x + leg.shinDx,
-    oy + 20 + leg.thighRows,
-    4,
-    leg.shinRows,
+    PALETTE.J,
+    ox + shinX,
+    oy + 20 + leg.thighRows + leg.shinRows - 2,
+    5,
+    2,
   );
-  drawMatrixPixel(ctx, PALETTE.J, ox + leg.x + leg.shinDx, oy + 20 + leg.thighRows + leg.shinRows - 2, 5, 2);
 }
 
 function drawArm(
@@ -122,42 +125,65 @@ function drawArm(
 
 type PoseName = 'run' | 'jump' | 'dive' | 'cheer' | 'idle';
 
+/**
+ * Ciclo de corrida em 4 frames: contato (perna dianteira estendida, traseira
+ * com calcanhar levantado) e passagem (joelho flexionado no ar, perna de apoio
+ * reta) — em visão lateral as pernas se alternam silhueta a silhueta. O corpo
+ * sobe 1px nos frames de passagem.
+ */
+const RUN_STRIDE: { lead: LegPose; trail: LegPose } = {
+  lead: { hip: 11, thighDx: 2, thighRows: 4, shinDx: 2, shinRows: 4 },
+  trail: { hip: 5, thighDx: -2, thighRows: 4, shinDx: -2, shinRows: 3 },
+};
+const RUN_PASS: { lead: LegPose; trail: LegPose } = {
+  lead: { hip: 11, thighDx: 1, thighRows: 3, shinDx: 2, shinRows: 3 },
+  trail: { hip: 5, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 },
+};
+const RUN_CYCLE: Array<{ lead: LegPose; trail: LegPose }> = [
+  RUN_STRIDE,
+  RUN_PASS,
+  RUN_STRIDE,
+  RUN_PASS,
+];
+
 function drawPose(ctx: CanvasRenderingContext2D, ox: number, oy: number, pose: PoseName, f: number): void {
   switch (pose) {
     case 'run': {
-      const stride = [2, 0, -2, 0][f % 4];
-      drawLeg(ctx, ox, oy, { x: 5 - Math.max(0, stride), thighRows: 4, shinDx: stride, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { x: 11 - Math.min(0, stride), thighRows: 4, shinDx: -stride, shinRows: 4 });
-      const armSwing = [-1, 0, 1, 0][f % 4];
+      const cycle = RUN_CYCLE[f % 4];
+      drawLeg(ctx, ox, oy, cycle.lead);
+      drawLeg(ctx, ox, oy, cycle.trail);
+      const armSwing = f % 2 === 0 ? -1 : 1;
       drawArm(ctx, ox, oy, 1, 16 + armSwing, 2, 3);
       drawArm(ctx, ox, oy, 17, 16 - armSwing, 2, 3);
       break;
     }
     case 'jump': {
-      drawLeg(ctx, ox, oy, { x: 5, thighRows: 3, shinDx: -2, shinRows: 3 });
-      drawLeg(ctx, ox, oy, { x: 11, thighRows: 3, shinDx: 2, shinRows: 3 });
+      drawLeg(ctx, ox, oy, { hip: 5, thighDx: 0, thighRows: 3, shinDx: -2, shinRows: 3 });
+      drawLeg(ctx, ox, oy, { hip: 11, thighDx: 0, thighRows: 3, shinDx: 2, shinRows: 3 });
       drawArm(ctx, ox, oy, 1, 13, 2, 4);
       drawArm(ctx, ox, oy, 17, 13, 2, 4);
       break;
     }
     case 'dive': {
-      drawLeg(ctx, ox, oy, { x: 4, thighRows: 4, shinDx: -3, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { x: 10, thighRows: 4, shinDx: -2, shinRows: 4 });
+      drawLeg(ctx, ox, oy, { hip: 4, thighDx: 0, thighRows: 4, shinDx: -3, shinRows: 4 });
+      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: -2, shinRows: 4 });
       drawArm(ctx, ox, oy, 1, 18, 2, 3);
       drawArm(ctx, ox, oy, 17, 18, 2, 3);
       break;
     }
     case 'cheer': {
-      const bounce = f % 2;
-      drawLeg(ctx, ox, oy, { x: 6, thighRows: 4 - bounce, shinDx: 0, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { x: 10, thighRows: 4 - bounce, shinDx: 0, shinRows: 4 });
-      drawArm(ctx, ox, oy, 1, 4 + bounce, 2, 9, true);
-      drawArm(ctx, ox, oy, 17, 4 + bounce, 2, 9, true);
+      drawLeg(ctx, ox, oy, { hip: 6, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
+      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
+      const swap = f % 2;
+      const leftY = 4 + swap;
+      const rightY = 5 - swap;
+      drawArm(ctx, ox, oy, 1, leftY, 2, 13 - leftY, true);
+      drawArm(ctx, ox, oy, 17, rightY, 2, 13 - rightY, true);
       break;
     }
     case 'idle': {
-      drawLeg(ctx, ox, oy, { x: 6, thighRows: 4, shinDx: 0, shinRows: 4 });
-      drawLeg(ctx, ox, oy, { x: 10, thighRows: 4, shinDx: 0, shinRows: 4 });
+      drawLeg(ctx, ox, oy, { hip: 6, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
+      drawLeg(ctx, ox, oy, { hip: 10, thighDx: 0, thighRows: 4, shinDx: 0, shinRows: 4 });
       drawArm(ctx, ox, oy, 1, 16, 2, 3);
       drawArm(ctx, ox, oy, 17, 16, 2, 3);
       break;
@@ -200,8 +226,9 @@ export function buildLariSpriteSheet(): LariSpriteSheet {
   ctx.imageSmoothingEnabled = false;
   FRAME_ORDER.forEach((frame, i) => {
     const ox = i * SPRITE_W;
-    drawBase(ctx, ox, 0);
-    drawPose(ctx, ox, 0, frame.pose, frame.f);
+    const bob = frame.pose === 'run' && frame.f % 2 === 1 ? -1 : 0;
+    drawBase(ctx, ox, bob);
+    drawPose(ctx, ox, bob, frame.pose, frame.f);
   });
   return { canvas, frameCount: FRAME_ORDER.length };
 }
