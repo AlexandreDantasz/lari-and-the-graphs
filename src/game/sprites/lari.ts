@@ -50,7 +50,7 @@ const BASE_ROWS: string[] = [
   '.KWWWWWWWGWWWWWWK...',
   '.KWWWWGGGGWWRWWWK...',
   '.KWWWWWWWGWWWWWWK...',
-  'SSWWWWWWWGWWWWWWSS..',
+  '.KWWWWWWWGWWWWWWK...',
 ];
 
 function drawMatrixPixel(
@@ -109,7 +109,13 @@ function drawArm(
   y: number,
   w: number,
   h: number,
+  raised = false,
 ): void {
+  if (raised) {
+    drawMatrixPixel(ctx, PALETTE.S, ox + x, oy + y, w, 2);
+    drawMatrixPixel(ctx, PALETTE.W, ox + x, oy + y + 2, w, h - 2);
+    return;
+  }
   drawMatrixPixel(ctx, PALETTE.W, ox + x, oy + y, w, h);
   drawMatrixPixel(ctx, PALETTE.S, ox + x, oy + y + h, w, 2);
 }
@@ -145,8 +151,8 @@ function drawPose(ctx: CanvasRenderingContext2D, ox: number, oy: number, pose: P
       const bounce = f % 2;
       drawLeg(ctx, ox, oy, { x: 6, thighRows: 4 - bounce, shinDx: 0, shinRows: 4 });
       drawLeg(ctx, ox, oy, { x: 10, thighRows: 4 - bounce, shinDx: 0, shinRows: 4 });
-      drawArm(ctx, ox, oy, 1, 10 - bounce, 2, 4);
-      drawArm(ctx, ox, oy, 17, 10 - bounce, 2, 4);
+      drawArm(ctx, ox, oy, 1, 4 + bounce, 2, 9, true);
+      drawArm(ctx, ox, oy, 17, 4 + bounce, 2, 9, true);
       break;
     }
     case 'idle': {
