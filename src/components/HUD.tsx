@@ -39,12 +39,14 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const W = SPRITE_W * 4;
-    const H = SPRITE_H * 4;
+    const GROUND = SPRITE_H * 4;
+    const HEADROOM = 32;
+    const H = GROUND + HEADROOM;
     const IDLE_T = 0.65;
     const AIR_T = 0.8;
     const SQUASH_T = 0.22;
     const CYCLE = IDLE_T + AIR_T + SQUASH_T;
-    const drawFrame = (frame: number, dy = 0): void => {
+    const drawFrame = (frame: number, dy = HEADROOM): void => {
       ctx.drawImage(
         sheet.canvas,
         frame * SPRITE_W,
@@ -54,7 +56,7 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
         0,
         dy,
         W,
-        H,
+        GROUND,
       );
     };
     let raf = 0;
@@ -69,7 +71,7 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
           drawFrame(LARI_FRAMES.idle);
         } else if (p < IDLE_T + AIR_T) {
           const q = (p - IDLE_T) / AIR_T;
-          drawFrame(LARI_FRAMES.jump, -26 * 4 * q * (1 - q));
+          drawFrame(LARI_FRAMES.jump, HEADROOM - 26 * 4 * q * (1 - q));
         } else {
           const q = (p - IDLE_T - AIR_T) / SQUASH_T;
           const s = Math.sin(q * Math.PI);
@@ -99,7 +101,7 @@ function LariPortrait({ grade, size = 92 }: { grade: string; size?: number }) {
     <canvas
       ref={canvasRef}
       width={SPRITE_W * 4}
-      height={SPRITE_H * 4}
+      height={SPRITE_H * 4 + 32}
       className="lari-portrait"
       style={{ width: size }}
       aria-label={`Lari ${grade}`}
