@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 
 /**
  * Splash de abertura: as ondas dos gráficos clínicos viram o mar que submerge
- * a tela da direita para a esquerda; quando a maré recua, o menu do jogo
- * aparece pronto. Toque/clique pula para a revelação.
+ * a tela da direita para a esquerda; quando a maré recua, o jogo aparece pronto
+ * para começar (onReveal dispara a transição de menu para a fase). Toque/clique
+ * pula para a revelação.
  */
 
 const SUBMERGE_END = 1.6;
@@ -22,14 +23,19 @@ const easeInOut = (v: number): number => {
   return c < 0.5 ? 2 * c * c : 1 - Math.pow(-2 * c + 2, 2) / 2;
 };
 
-export default function SplashScreen({ onDone }: { onDone: () => void }) {
+interface Props {
+  onReveal: () => void;
+  onDone: () => void;
+}
+
+export default function SplashScreen({ onReveal, onDone }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
-  const startRef = useRef(0);
-  const skipRef = useRef(0);
-  const doneRef = useRef(false);
-  const rafRef = useRef(0);
+  const onRevealRef = useRef(onReveal);
+  const onDoneRef = useRef(onDone);
+  onRevealRef.current = onReveal;
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -38,6 +44,13 @@ export default function SplashScreen({ onDone }: { onDone: () => void }) {
     if (!canvas || !wrap || !title) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    let disposed = false;
+    let finished = false;
+    let revealed = false;
+    let start = 0;
+    let skip = 0;
+    let raf = 0;
 
     let width = window.innerWidth;
     let height = window.innerHeight;
@@ -111,10 +124,19 @@ export default function SplashScreen({ onDone }: { onDone: () => void }) {
       ctx.restore();
     };
 
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      wrap.classList.add('splash-hide');
+      window.setTimeout(() => {
+        if (!disposed) onDoneRef.current();
+      }, FADE_MS);
+    };
+
     const frame = (now: number): void => {
-      if (doneRef.current) return;
-      if (startRef.current === 0) startRef.current = now;
-      const t = (now - startRef.current) / 1000 + skipRef.current;
+      if (disposed || finished) return;
+      if (start === 0) start = now;
+      const t = (now - start) / 1000 + skip;
 
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = '#070a14';
@@ -129,6 +151,11 @@ export default function SplashScreen({ onDone }: { onDone: () => void }) {
         frontX = width * easeInOut((t - FULL_END) / (RECEDE_END - FULL_END));
       } else {
         frontX = width;
+      }
+
+      if (!revealed && t >= FULL_END) {
+        revealed = true;
+        onRevealRef.current();
       }
 
       drawWater(frontX, t);
@@ -155,31 +182,29 @@ export default function SplashScreen({ onDone }: { onDone: () => void }) {
       title.style.transform = `translate(-50%, calc(-50% + ${bob}px))`;
 
       if (t >= RECEDE_END) {
-        doneRef.current = true;
-        wrap.classList.add('splash-hide');
-        window.setTimeout(onDone, FADE_MS);
+        finish();
         return;
       }
-      rafRef.current = requestAnimationFrame(frame);
+      raf = requestAnimationFrame(frame);
     };
 
-    rafRef.current = requestAnimationFrame(frame);
+    raf = requestAnimationFrame(frame);
 
-    const skip = () => {
-      if (doneRef.current) return;
-      const elapsed = (performance.now() - startRef.current) / 1000 + skipRef.current;
-      if (elapsed < FULL_END) skipRef.current = FULL_END - elapsed;
-      else if (elapsed < RECEDE_END) skipRef.current = RECEDE_END - elapsed + 0.05;
+    const skipAhead = () => {
+      if (disposed || finished) return;
+      const elapsed = start === 0 ? 0 : (performance.now() - start) / 1000 + skip;
+      if (elapsed < FULL_END) skip = FULL_END - elapsed;
+      else if (elapsed < RECEDE_END) skip = RECEDE_END - elapsed + 0.05;
     };
-    window.addEventListener('pointerdown', skip);
+    window.addEventListener('pointerdown', skipAhead);
 
     return () => {
-      doneRef.current = true;
-      cancelAnimationFrame(rafRef.current);
+      disposed = true;
+      cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
-      window.removeEventListener('pointerdown', skip);
+      window.removeEventListener('pointerdown', skipAhead);
     };
-  }, [onDone]);
+  }, []);
 
   return (
     <div ref={wrapRef} className="splash">

@@ -13,6 +13,7 @@ import {
 interface Props {
   state: HudState;
   engineRef: MutableRefObject<GameEngine | null>;
+  onStart?: () => void;
 }
 
 const PHASE_RESULT_LABEL: Record<PhaseResult['phase'], string> = {
@@ -161,7 +162,15 @@ function Toasty({ toastKey }: { toastKey: number }) {
   );
 }
 
-function MenuScreen({ engineRef, hasTouch }: { engineRef: Props['engineRef']; hasTouch: boolean }) {
+function MenuScreen({
+  engineRef,
+  hasTouch,
+  onStart,
+}: {
+  engineRef: Props['engineRef'];
+  hasTouch: boolean;
+  onStart?: () => void;
+}) {
   return (
     <div className="overlay">
       <div className="menu-hero">
@@ -178,14 +187,17 @@ function MenuScreen({ engineRef, hasTouch }: { engineRef: Props['engineRef']; ha
         <li>📈 Fase 2 — Timpanometria: calibre a pressão nos 5 tipos de Jerger</li>
         <li>🛡️ Fase 3 — Reflexo Estapediano: bloqueie só as ondas presentes</li>
         <li>⚠️ Erros derrubam a Credibilidade do Laudo — a 0% o exame é invalidado!</li>
-        <li>📝 Ao fim de cada gráfico, acerte o diagnóstico do laudo (ou Game Over!)</li>
+        <li>📝 Ao fim de cada gráfico, o quiz do laudo mostra a memória do exame — errar não reprova!</li>
       </ul>
       <p className="controls-hint">
         {hasTouch
           ? 'Toque = pular · Segure = pressão/mergulho · Deslize ↑ = reflexo'
           : 'Clique/Espaço = pular · Segure = pressão · ↑ = reflexo · ↓ = mergulhar'}
       </p>
-      <button className="primary-btn" onClick={() => engineRef.current?.beginRun()}>
+      <button
+        className="primary-btn"
+        onClick={() => (onStart ? onStart() : engineRef.current?.beginRun())}
+      >
         Começar o plantão 🩺
       </button>
     </div>
@@ -407,7 +419,7 @@ function FinalReportScreen({
   );
 }
 
-export function HUD({ state, engineRef }: Props) {
+export function HUD({ state, engineRef, onStart }: Props) {
   const engine = engineRef.current;
   return (
     <div className={`hud ${state.isPortrait ? 'portrait' : 'landscape'}`}>
@@ -439,7 +451,9 @@ export function HUD({ state, engineRef }: Props) {
         </>
       )}
 
-      {state.screen === 'menu' && <MenuScreen engineRef={engineRef} hasTouch={state.hasTouch} />}
+      {state.screen === 'menu' && (
+        <MenuScreen engineRef={engineRef} hasTouch={state.hasTouch} onStart={onStart} />
+      )}
       {state.screen === 'phaseIntro' && <PhaseIntroScreen state={state} engineRef={engineRef} />}
       {state.screen === 'quiz' && <QuizScreen state={state} engineRef={engineRef} />}
       {state.screen === 'phaseResults' && (

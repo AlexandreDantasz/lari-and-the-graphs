@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { GameEngine } from './game/engine';
 import { HudState } from './game/types';
 import { HUD } from './components/HUD';
@@ -35,7 +35,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const [state, setState] = useState<HudState>(INITIAL_STATE);
-  const [splashDone, setSplashDone] = useState(false);
+  const [splashVisible, setSplashVisible] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -48,11 +48,25 @@ export default function App() {
     };
   }, []);
 
+  const handleStart = useCallback(() => {
+    setSplashVisible(true);
+  }, []);
+
+  const handleSplashReveal = useCallback(() => {
+    engineRef.current?.beginRun();
+  }, []);
+
+  const handleSplashDone = useCallback(() => {
+    setSplashVisible(false);
+  }, []);
+
   return (
     <div className="app-root">
       <div ref={containerRef} className="game-container" />
-      <HUD state={state} engineRef={engineRef} />
-      {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
+      <HUD state={state} engineRef={engineRef} onStart={handleStart} />
+      {splashVisible && (
+        <SplashScreen onReveal={handleSplashReveal} onDone={handleSplashDone} />
+      )}
     </div>
   );
 }
