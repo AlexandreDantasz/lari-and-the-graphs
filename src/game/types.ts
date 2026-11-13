@@ -64,6 +64,7 @@ export interface Marker {
   missed: boolean;
   signaled: boolean;
   window: number;
+  registeredY?: number;
 }
 
 export interface Wave {

@@ -57,6 +57,10 @@ Ao fim de cada gráfico o jogo pausa e mostra o **Laudo do Paciente** com a
 (o audiograma com seus limiares registrados, o traçado timpanométrico real
 sobre a curva alvo, ou os estímulos do reflexo com ✓/✗ das suas respostas).
 A pergunta se refere a esse gráfico — consulte-o antes de responder!
+Na audiometria, o diagnóstico é calculado **dinamicamente** a partir dos
+limiares que você realmente registrou (o gráfico mostra seu traçado cheio
+sobre o gabarito do caso em linha tracejada), então memória e resposta
+correta estão sempre coerentes.
 
 O quiz **não é eliminativo**: acertou, +400 pontos; errou, a resposta correta
 fica destacada com a explicação clínica e o jogo simplesmente continua.

@@ -162,6 +162,7 @@ export class GameEngine {
   private shieldUsed = false;
   private reflexLog: { present: boolean; ok: boolean }[] = [];
   private quizChosen: number | null = null;
+  private moodSmoothed = 0;
   private waves: Wave[] = [];
   private waveTimer = 0;
   private waveInterval = 1.7;
@@ -379,6 +380,7 @@ export class GameEngine {
     this.cheerTimer = 0;
     this.quiz = null;
     this.gameOverReason = '';
+    this.moodSmoothed = (CRED_MAX - this.credibility) / CRED_MAX;
 
     if (id !== 'timpanometria') {
       const rng = makeRng(this.phaseSeed + 99);
@@ -454,6 +456,9 @@ export class GameEngine {
 
   private addCredibility(delta: number): void {
     this.credibility = clamp(this.credibility + delta, 0, CRED_MAX);
+    if (delta > 0) {
+      this.moodSmoothed = Math.max(0, this.moodSmoothed - delta * 0.014);
+    }
     if (this.credibility <= 0) {
       this.doGameOver(
         'A Credibilidade do Laudo chegou a 0% — o exame foi invalidado pela avaliadora.',
@@ -478,7 +483,7 @@ export class GameEngine {
     data.image = this.buildQuizImage(id);
     data.imageCaption =
       id === 'audiometria'
-        ? 'Memória do exame · o audiograma que você acabou de traçar'
+        ? 'Memória do exame · seu traçado (cheio) × gabarito do caso (tracejado)'
         : id === 'timpanometria'
           ? 'Memória do exame · seu traçado (azul) × curva alvo (tracejada)'
           : 'Memória do exame · estímulos apresentados e suas respostas';
@@ -531,8 +536,9 @@ export class GameEngine {
       ctx.fillText(terrain.labelAt(m.x), px(m.x), H - bottom + 14);
     }
 
-    ctx.strokeStyle = '#8a5a2b';
-    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = '#b08a5a';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 6]);
     ctx.beginPath();
     for (let x = 0; x <= terrain.length; x += 24) {
       const sx = px(x);
@@ -541,10 +547,35 @@ export class GameEngine {
       else ctx.lineTo(sx, sy);
     }
     ctx.stroke();
+    for (const m of terrain.markers) {
+      ctx.beginPath();
+      ctx.arc(px(m.x), py(m.y), 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = '#1f7ae0';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    let started = false;
+    for (const m of terrain.markers) {
+      if (!m.hit || m.registeredY === undefined) continue;
+      const sx = px(m.x);
+      const sy = py(m.registeredY);
+      if (!started) {
+        ctx.moveTo(sx, sy);
+        started = true;
+      } else {
+        ctx.lineTo(sx, sy);
+      }
+    }
+    ctx.stroke();
 
     for (const m of terrain.markers) {
+      const ry = m.registeredY;
+      const registered = m.hit && ry !== undefined;
       const sx = px(m.x);
-      const sy = py(m.y);
+      const sy = py(registered ? ry : m.y);
       const color = m.hit ? '#1e9e4a' : m.missed ? '#d43a3a' : '#7c86a0';
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
@@ -552,7 +583,8 @@ export class GameEngine {
       if (m.label === 'O') {
         ctx.beginPath();
         ctx.arc(sx, sy, 6, 0, Math.PI * 2);
-        ctx.stroke();
+        if (registered) ctx.fill();
+        else ctx.stroke();
       } else {
         ctx.beginPath();
         ctx.moveTo(sx - 5, sy - 5);
@@ -562,6 +594,13 @@ export class GameEngine {
         ctx.stroke();
       }
     }
+
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#1f7ae0';
+    ctx.fillText('— seu traçado', left + 4, top + 10);
+    ctx.fillStyle = '#b08a5a';
+    ctx.fillText('- - gabarito do caso', left + 110, top + 10);
   }
 
   private drawTympMemory(ctx: CanvasRenderingContext2D): void {
@@ -692,7 +731,9 @@ export class GameEngine {
   }
 
   private buildAudiometryQuiz(): QuizData {
-    const dbs = this.terrain.markers.map((m) => 95 - m.y / 1.7);
+    const dbs = this.terrain.markers.map((m) =>
+      95 - (m.hit && m.registeredY !== undefined ? m.registeredY : m.y) / 1.7,
+    );
     const mean = (arr: number[]): number =>
       arr.reduce((a, b) => a + b, 0) / Math.max(1, arr.length);
     const avgLow = mean(dbs.slice(0, 3));
@@ -701,23 +742,28 @@ export class GameEngine {
 
     let correctText: string;
     let explain: string;
-    if (avgLow - avgHigh >= 25) {
+    const highDrop = Math.max(dbs[dbs.length - 2] ?? 0, dbs[dbs.length - 1] ?? 0) - avgLow;
+    if (avgHigh - avgLow >= 25 || highDrop >= 25) {
       correctText = DIAGNOSIS_POOL[0];
       explain =
-        'Os limiares pioram progressivamente nas frequências altas (4000/8000 Hz) — padrão em rampa típico de perda neurossensorial.';
+        'No gráfico da memória, os limiares pioram nas frequências altas (4000/8000 Hz) — padrão em rampa típico de perda neurossensorial.';
     } else if (avgAll <= 20) {
       correctText = DIAGNOSIS_POOL[1];
       explain =
-        'Todos os limiares permaneceram \u2264 20 dB, dentro dos valores de normalidade.';
+        'No gráfico da memória, todos os limiares registrados permaneceram ≤ 20 dB, dentro dos valores de normalidade.';
     } else {
       correctText = DIAGNOSIS_POOL[2];
       explain =
-        'Limiares moderadamente elevados, sem queda acentuada nos agudos — perda leve e difusa.';
+        'No gráfico da memória, os limiares estão moderadamente elevados, sem queda acentuada nos agudos — perda leve e difusa.';
+    }
+    const omissions = this.terrain.markers.filter((m) => m.missed).length;
+    if (omissions > 0) {
+      explain += ` Atenção: ${omissions} limiar(es) ficaram sem registro (pontos vermelhos) e herdam o valor do caso na análise.`;
     }
     const wrongs = shuffle(DIAGNOSIS_POOL.filter((t) => t !== correctText)).slice(0, 2);
     const options = shuffle([correctText, ...wrongs]);
     return {
-      question: 'Qual é o diagnóstico deste audiograma?',
+      question: 'Qual é o diagnóstico do audiograma traçado na memória?',
       options,
       correct: options.indexOf(correctText),
       explain,
@@ -766,7 +812,8 @@ export class GameEngine {
     ]);
     const options = shuffle([correctText, ...wrongs]);
     return {
-      question: 'O que o reflexo do estapédio avalia clinicamente?',
+      question:
+        'Com base nos estímulos da memória do exame, o que o reflexo do estapédio avalia clinicamente?',
       options,
       correct: options.indexOf(correctText),
       explain:
@@ -867,6 +914,7 @@ export class GameEngine {
 
   private hitMarker(marker: Marker): void {
     marker.hit = true;
+    marker.registeredY = this.lari.y;
     this.hits += 1;
     const dx = Math.abs(this.lari.x - marker.x);
     const perfect = dx <= marker.window * 0.35;
@@ -936,7 +984,10 @@ export class GameEngine {
       this.updateRunnerPhase(dt, phase);
     }
 
-    this.clinic.setMood((CRED_MAX - this.credibility) / CRED_MAX);
+    const moodTarget = (CRED_MAX - this.credibility) / CRED_MAX;
+    const moodRate = moodTarget < this.moodSmoothed ? 0.28 : 2.6;
+    this.moodSmoothed += (moodTarget - this.moodSmoothed) * Math.min(1, dt * moodRate);
+    this.clinic.setMood(clamp(this.moodSmoothed, 0, 1));
     this.clinic.setProgress(this.currentProgress(), phase);
   }
 
